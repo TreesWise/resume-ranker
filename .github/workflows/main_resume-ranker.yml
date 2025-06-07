@@ -68,4 +68,4 @@ jobs:
         with:
           app-name: 'Resume-ranker'
           slot-name: 'Production'
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_00C9C6513D5147DEBF84712A171E380B }}
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_720C2D00A54F40B88D5AEC2A2185DAE8 }}
