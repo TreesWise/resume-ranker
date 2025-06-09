@@ -82,7 +82,7 @@ async def rank_uploaded_resumes_dynamic(criteria: List[str] = Body(...)):
         if filename.endswith(".pdf"):
             resume_text = extract_text_from_pdf(BytesIO(content))
         elif filename.endswith(".docx"):
-            resume_text = await extract_text_from_docx(BytesIO(content))
+            resume_text = extract_text_from_docx(BytesIO(content))
         else:
             continue
 
