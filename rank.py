@@ -22,7 +22,7 @@ def get_relevance_score(resume_text, jd_text, criteria_list):
     messages = [
         {
             "role": "user",
-            "content": f"Compare the following resume with the job description.\n\nResume:\n{resume_text}\n\nJob Description:\n{jd_text}"
+            "content": f"Please evaluate the following resume against the job description based on these criteria: {', '.join(criteria_list)}.\n\nResume:\n{resume_text}\n\nJob Description:\n{jd_text}\n\nPlease return a score for each criterion with an explanation."    
         }
     ]
 
@@ -35,11 +35,11 @@ def get_relevance_score(resume_text, jd_text, criteria_list):
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 100,
-                    "description": f"Score for: {criterion}"
+                    "description": f"Score for: {criterion}. The score represents how well the resume matches this criterion."
                 },
                 "comment": {
                     "type": "string",
-                    "description": f"Explanation for: {criterion}"
+                    "description": f"Explanation for: {criterion}. Please provide a detailed explanation of how the resume meets or fails to meet this criterion."
                 }
             },
             "required": ["score", "comment"]
@@ -52,8 +52,8 @@ def get_relevance_score(resume_text, jd_text, criteria_list):
     }
 
     function_schema = {
-        "name": "evaluate",
-        "description": "Dynamically evaluate a resume.",
+        "name": "evaluate_resume",
+        "description": "Evaluate a resume against the job description based on user-defined criteria.",
         "parameters": {
             "type": "object",
             "properties": criteria_properties,
@@ -65,7 +65,7 @@ def get_relevance_score(resume_text, jd_text, criteria_list):
         model=AZURE_OPENAI_DEPLOYMENT_NAME,
         messages=messages,
         functions=[function_schema],
-        function_call={"name": "evaluate"},
+        function_call={"name": "evaluate_resume"},
         temperature=0,
     )
 
