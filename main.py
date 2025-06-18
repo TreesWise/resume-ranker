@@ -401,6 +401,298 @@
 
 
 
+# from fastapi import FastAPI, File, UploadFile, Form
+# from fastapi.responses import HTMLResponse, JSONResponse
+# from fastapi.middleware.cors import CORSMiddleware
+# from typing import List
+# from io import BytesIO
+# import re
+# from rank import get_relevance_score
+# from extract import extract_text_from_pdf, extract_text_from_docx
+# from sqlalchemy import create_engine, text
+# from datetime import datetime
+# import uuid
+# from pydantic import BaseModel
+
+# app = FastAPI()
+
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=["*"],
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+
+# def get_db_engine():
+#     connection_string = (
+#         "mssql+pyodbc://@10.201.1.86,50001/Resume_Parser"
+#         "?driver=ODBC+Driver+17+for+SQL+Server"
+#         "&trusted_connection=yes"
+#     )
+#     return create_engine(connection_string)
+
+# def extract_email_regex(text):
+#     match = re.search(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text)
+#     return match.group(0) if match else None
+
+# @app.post("/upload-folder/")
+# async def upload_folder(uploaded_by: str = Form(...), files: List[UploadFile] = File(...)):
+#     session_id = str(uuid.uuid4())
+#     engine = get_db_engine()
+#     with engine.begin() as conn:
+#         for file in files:
+#             content = await file.read()
+#             resume_text = (
+#                 extract_text_from_pdf(BytesIO(content)) if file.filename.endswith(".pdf")
+#                 else extract_text_from_docx(BytesIO(content)) if file.filename.endswith(".docx")
+#                 else None
+#             )
+#             if not resume_text:
+#                 continue
+#             email = extract_email_regex(resume_text) or "unknown@example.com"
+#             conn.execute(text("""
+#                 INSERT INTO TempResumes (filename, email, resume_content, uploaded_by, upload_session_id, created_at)
+#                 VALUES (:filename, :email, :resume_content, :uploaded_by, :upload_session_id, GETDATE())
+#             """), {
+#                 "filename": file.filename,
+#                 "email": email,
+#                 "resume_content": resume_text,
+#                 "uploaded_by": uploaded_by,
+#                 "upload_session_id": session_id
+#             })
+
+#     return {"status": "success", "message": f"{len(files)} resumes uploaded.", "uploaded_by": uploaded_by}
+
+# @app.post("/upload-jd/")
+# async def upload_job_description(
+#     uploaded_by: str = Form(...),
+#     job_title: str = Form(...),
+#     jd_file: UploadFile = File(...)
+# ):
+#     content = await jd_file.read()
+#     engine = get_db_engine()
+#     session_id = str(uuid.uuid4())
+#     jd_text = (
+#         extract_text_from_docx(BytesIO(content)) if jd_file.filename.endswith(".docx")
+#         else extract_text_from_pdf(BytesIO(content)) if jd_file.filename.endswith(".pdf")
+#         else None
+#     )
+#     if not jd_text:
+#         return JSONResponse(content={"error": "Unsupported file type"}, status_code=400)
+
+#     with engine.begin() as conn:
+#         conn.execute(text("""
+#             INSERT INTO TempJobDescription (uploaded_by, job_title, jd_text, upload_session_id, created_at)
+#             VALUES (:uploaded_by, :job_title, :jd_text, :upload_session_id, GETDATE())
+#         """), {
+#             "uploaded_by": uploaded_by,
+#             "job_title": job_title,
+#             "jd_text": jd_text,
+#             "upload_session_id": session_id
+#         })
+
+#     return {
+#         "status": "success",
+#         "message": "Job description uploaded.",
+#         "uploaded_by": uploaded_by,
+#         "job_title": job_title
+#     }
+
+# class RankRequest(BaseModel):
+#     criteria: List[str]
+#     uploaded_by: str
+#     job_title: str
+
+# @app.post("/rank-resumes-dynamic/")
+# async def rank_uploaded_resumes_dynamic(request: RankRequest):
+#     criteria = request.criteria
+#     uploaded_by = request.uploaded_by
+#     job_title = request.job_title
+
+#     engine = get_db_engine()
+
+#     # Fetch latest JD for this uploaded_by and job_title
+#     with engine.connect() as conn:
+#         jd_row = conn.execute(text("""
+#             SELECT TOP 1 jd_text 
+#             FROM TempJobDescription 
+#             WHERE uploaded_by = :uploaded_by AND job_title = :job_title 
+#             ORDER BY created_at DESC
+#         """), {
+#             "uploaded_by": uploaded_by,
+#             "job_title": job_title
+#         }).fetchone()
+
+#     if not jd_row:
+#         return JSONResponse(content={"error": "No job description found."}, status_code=400)
+
+#     jd_text = jd_row[0]
+#     results = []
+
+#     # Fetch resumes
+#     with engine.connect() as conn:
+#         resumes = conn.execute(text("""
+#             SELECT filename, email, resume_content 
+#             FROM TempResumes 
+#             WHERE uploaded_by = :uploaded_by
+#         """), {"uploaded_by": uploaded_by}).fetchall()
+
+#     if not resumes:
+#         return JSONResponse(content={"error": "No resumes found."}, status_code=400)
+
+#     for filename, email, resume_text in resumes:
+#         if not resume_text or not email:
+#             continue
+
+#         with engine.connect() as conn:
+#             exists = conn.execute(text("""
+#                 SELECT COUNT(*) FROM CV_Ranking_User_Email 
+#                 WHERE email = :email AND job_title = :job_title
+#             """), {"email": email, "job_title": job_title}).scalar()
+#         if exists > 0:
+#             continue
+
+#         evaluation_result = get_relevance_score(resume_text, jd_text, criteria)
+#         weighted_score = round(sum(evaluation_result[c]["score"] for c in criteria) / len(criteria), 2)
+
+#         with engine.begin() as conn:
+#             conn.execute(text("""
+#                 INSERT INTO CV_Ranking_User_Email (email, weighted_score, uploaded_by, job_title)
+#                 VALUES (:email, :weighted_score, :uploaded_by, :job_title)
+#             """), {
+#                 "email": email,
+#                 "weighted_score": weighted_score,
+#                 "uploaded_by": uploaded_by,
+#                 "job_title": job_title
+#             })
+
+#         results.append({
+#             "filename": filename,
+#             "email": email,
+#             "weighted_score": weighted_score,
+#             "section_scores": {c: evaluation_result[c]["score"] for c in criteria},
+#             "job_title": job_title,
+#             "evaluation": evaluation_result
+#         })
+
+#     results.sort(key=lambda x: x["weighted_score"], reverse=True)
+#     return {"ranked_resumes": results}
+
+# @app.get("/", response_class=HTMLResponse)
+# def upload_form():
+#     return """
+#     <!DOCTYPE html>
+#     <html>
+#     <head><title>Resume Ranker</title></head>
+#     <body>
+#     <h2>Upload Resume Folder</h2>
+#     <form id="resumeUploadForm" action="/upload-folder/" enctype="multipart/form-data" method="post">
+#         <label>Upload by (Your Name):</label><br>
+#         <input type="text" name="uploaded_by" id="uploaded_by_input" required><br><br>
+#         <label>Select folder containing resumes (.pdf, .docx):</label><br>
+#         <input type="file" name="files" webkitdirectory directory multiple accept=".pdf,.docx"><br><br>
+#         <input type="submit" value="Upload Resumes">
+#     </form>
+#     <div id="resumeUploadResult"></div>
+
+#     <h2>Upload Job Description & Role</h2>
+#     <form id="jdUploadForm" action="/upload-jd/" enctype="multipart/form-data" method="post">
+#         <label>Select Job Description (.pdf or .docx):</label><br>
+#         <input type="file" name="jd_file" accept=".pdf,.docx" required><br><br>
+#         <label>Job Role:</label><br>
+#         <input type="text" name="job_title" id="job_title_input" required><br><br>
+#         <label>Uploaded by (must match resume uploader):</label><br>
+#         <input type="text" name="uploaded_by" id="uploaded_by_jd" required><br><br>
+#         <input type="submit" value="Upload JD + Job Role">
+#     </form>
+#     <div id="jdUploadResult"></div>
+
+#     <h2>Rank Resumes (Dynamic)</h2>
+#     <form id="rankForm">
+#         <input type="hidden" id="rank_uploaded_by">
+#         <input type="hidden" id="rank_job_title">
+
+#         <label>Criterion 1:</label><br>
+#         <input type="text" id="crit1"><br><br>
+#         <label>Criterion 2:</label><br>
+#         <input type="text" id="crit2"><br><br>
+#         <label>Criterion 3:</label><br>
+#         <input type="text" id="crit3"><br><br>
+#         <button type="button" onclick="submitRank()">Rank Resumes</button>
+#     </form>
+#     <h3>Results:</h3>
+#     <pre id="resultBox"></pre>
+
+#     <script>
+#         document.getElementById('resumeUploadForm').addEventListener('submit', async function (e) {
+#             e.preventDefault();
+#             const formData = new FormData(this);
+#             const uploadedBy = document.getElementById("uploaded_by_input").value.trim();
+#             const res = await fetch(this.action, { method: 'POST', body: formData });
+#             const result = await res.json();
+#             document.getElementById('resumeUploadResult').textContent = JSON.stringify(result, null, 2);
+#             if (uploadedBy) document.getElementById("rank_uploaded_by").value = uploadedBy;
+#         });
+
+#         document.getElementById('jdUploadForm').addEventListener('submit', async function (e) {
+#             e.preventDefault();
+#             const formData = new FormData(this);
+#             const uploadedBy = document.getElementById("uploaded_by_jd").value.trim();
+#             const jobTitle = document.getElementById("job_title_input").value.trim();
+#             const res = await fetch(this.action, { method: 'POST', body: formData });
+#             const result = await res.json();
+#             document.getElementById('jdUploadResult').textContent = JSON.stringify(result, null, 2);
+#             if (uploadedBy) document.getElementById("rank_uploaded_by").value = uploadedBy;
+#             if (jobTitle) document.getElementById("rank_job_title").value = jobTitle;
+#         });
+
+#         async function submitRank() {
+#             const criteria = [];
+#             const crit1 = document.getElementById("crit1").value.trim();
+#             const crit2 = document.getElementById("crit2").value.trim();
+#             const crit3 = document.getElementById("crit3").value.trim();
+#             if (crit1) criteria.push(crit1);
+#             if (crit2) criteria.push(crit2);
+#             if (crit3) criteria.push(crit3);
+
+#             const uploadedBy = document.getElementById("rank_uploaded_by").value.trim();
+#             const jobTitle = document.getElementById("rank_job_title").value.trim();
+
+#             if (!uploadedBy || !jobTitle || criteria.length === 0) {
+#                 document.getElementById("resultBox").textContent = "All fields are required.";
+#                 return;
+#             }
+
+#             const payload = {
+#                 criteria: criteria,
+#                 uploaded_by: uploadedBy,
+#                 job_title: jobTitle
+#             };
+
+#             try {
+#                 const res = await fetch("/rank-resumes-dynamic/", {
+#                     method: "POST",
+#                     headers: { "Content-Type": "application/json" },
+#                     body: JSON.stringify(payload)
+#                 });
+
+#                 const result = await res.json();
+#                 document.getElementById("resultBox").textContent = JSON.stringify(result, null, 2);
+#             } catch (err) {
+#                 document.getElementById("resultBox").textContent = "Error calling API: " + err.message;
+#             }
+#         }
+
+#     </script>
+#     </body>
+#     </html>
+#     """
+
+
+
+
+
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -424,13 +716,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# def get_db_engine():
+#     connection_string = (
+#         "mssql+pyodbc://@10.201.1.86,50001/Resume_Parser"
+#         "?driver=ODBC+Driver+17+for+SQL+Server"
+#         "&trusted_connection=yes"
+#     )
+#     return create_engine(connection_string)
+
+
 def get_db_engine():
-    connection_string = (
-        "mssql+pyodbc://@10.201.1.86,50001/Resume_Parser"
-        "?driver=ODBC+Driver+17+for+SQL+Server"
-        "&trusted_connection=yes"
-    )
-    return create_engine(connection_string)
+    return create_engine("sqlite:///Resume_Parser.db", connect_args={"check_same_thread": False})
+
 
 def extract_email_regex(text):
     match = re.search(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text)
@@ -453,13 +750,315 @@ async def upload_folder(uploaded_by: str = Form(...), files: List[UploadFile] = 
             email = extract_email_regex(resume_text) or "unknown@example.com"
             conn.execute(text("""
                 INSERT INTO TempResumes (filename, email, resume_content, uploaded_by, upload_session_id, created_at)
-                VALUES (:filename, :email, :resume_content, :uploaded_by, :upload_session_id, GETDATE())
+                VALUES (:filename, :email, :resume_content, :uploaded_by, :upload_session_id, :created_at)
             """), {
                 "filename": file.filename,
                 "email": email,
                 "resume_content": resume_text,
                 "uploaded_by": uploaded_by,
-                "upload_session_id": session_id
+                "upload_session_id": session_id,
+                "created_at": datetime.now()
+            })
+
+
+    return {"status": "success", "message": f"{len(files)} resumes uploaded.", "uploaded_by": uploaded_by}
+
+@app.post("/upload-jd/")
+async def upload_job_description(
+    uploaded_by: str = Form(...),
+    job_title: str = Form(...),
+    jd_file: UploadFile = File(...)
+):
+    content = await jd_file.read()
+    engine = get_db_engine()
+    session_id = str(uuid.uuid4())
+    jd_text = (
+        extract_text_from_docx(BytesIO(content)) if jd_file.filename.endswith(".docx")
+        else extract_text_from_pdf(BytesIO(content)) if jd_file.filename.endswith(".pdf")
+        else None
+    )
+    if not jd_text:
+        return JSONResponse(content={"error": "Unsupported file type"}, status_code=400)
+
+    with engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO TempJobDescription (uploaded_by, job_title, jd_text, upload_session_id, created_at)
+            VALUES (:uploaded_by, :job_title, :jd_text, :upload_session_id, :created_at)
+        """), {
+            "uploaded_by": uploaded_by,
+            "job_title": job_title,
+            "jd_text": jd_text,
+            "upload_session_id": session_id,
+            "created_at": datetime.now()
+        })
+
+
+    return {
+        "status": "success",
+        "message": "Job description uploaded.",
+        "uploaded_by": uploaded_by,
+        "job_title": job_title
+    }
+
+class RankRequest(BaseModel):
+    criteria: List[str]
+    uploaded_by: str
+    job_title: str
+
+@app.post("/rank-resumes-dynamic/")
+async def rank_uploaded_resumes_dynamic(request: RankRequest):
+    criteria = request.criteria
+    uploaded_by = request.uploaded_by
+    job_title = request.job_title
+
+    engine = get_db_engine()
+
+    # Fetch latest JD for this uploaded_by and job_title
+    with engine.connect() as conn:
+        jd_row = conn.execute(text("""
+            SELECT jd_text 
+FROM TempJobDescription 
+WHERE uploaded_by = :uploaded_by AND job_title = :job_title 
+ORDER BY created_at DESC 
+LIMIT 1
+
+        """), {
+            "uploaded_by": uploaded_by,
+            "job_title": job_title
+        }).fetchone()
+
+    if not jd_row:
+        return JSONResponse(content={"error": "No job description found."}, status_code=400)
+
+    jd_text = jd_row[0]
+    results = []
+
+    # Fetch resumes
+    with engine.connect() as conn:
+        resumes = conn.execute(text("""
+            SELECT filename, email, resume_content 
+            FROM TempResumes 
+            WHERE uploaded_by = :uploaded_by
+        """), {"uploaded_by": uploaded_by}).fetchall()
+
+    if not resumes:
+        return JSONResponse(content={"error": "No resumes found."}, status_code=400)
+
+    for filename, email, resume_text in resumes:
+        if not resume_text or not email:
+            continue
+
+        with engine.connect() as conn:
+            exists = conn.execute(text("""
+                SELECT COUNT(*) 
+FROM CV_Ranking_User_Email 
+WHERE email = :email AND job_title = :job_title
+
+            """), {"email": email, "job_title": job_title}).scalar()
+        if exists > 0:
+            continue
+
+        evaluation_result = get_relevance_score(resume_text, jd_text, criteria)
+        weighted_score = round(sum(evaluation_result[c]["score"] for c in criteria) / len(criteria), 2)
+
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO CV_Ranking_User_Email (email, weighted_score, uploaded_by, job_title)
+                VALUES (:email, :weighted_score, :uploaded_by, :job_title)
+            """), {
+                "email": email,
+                "weighted_score": weighted_score,
+                "uploaded_by": uploaded_by,
+                "job_title": job_title
+            })
+
+        results.append({
+            "filename": filename,
+            "email": email,
+            "weighted_score": weighted_score,
+            "section_scores": {c: evaluation_result[c]["score"] for c in criteria},
+            "job_title": job_title,
+            "evaluation": evaluation_result
+        })
+
+    results.sort(key=lambda x: x["weighted_score"], reverse=True)
+    return {"ranked_resumes": results}
+
+@app.get("/", response_class=HTMLResponse)
+def upload_form():
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head><title>Resume Ranker</title></head>
+    <body>
+    <h2>Upload Resume Folder</h2>
+    <form id="resumeUploadForm" action="/upload-folder/" enctype="multipart/form-data" method="post">
+        <label>Upload by (Your Name):</label><br>
+        <input type="text" name="uploaded_by" id="uploaded_by_input" required><br><br>
+        <label>Select folder containing resumes (.pdf, .docx):</label><br>
+        <input type="file" name="files" webkitdirectory directory multiple accept=".pdf,.docx"><br><br>
+        <input type="submit" value="Upload Resumes">
+    </form>
+    <div id="resumeUploadResult"></div>
+
+    <h2>Upload Job Description & Role</h2>
+    <form id="jdUploadForm" action="/upload-jd/" enctype="multipart/form-data" method="post">
+        <label>Select Job Description (.pdf or .docx):</label><br>
+        <input type="file" name="jd_file" accept=".pdf,.docx" required><br><br>
+        <label>Job Role:</label><br>
+        <input type="text" name="job_title" id="job_title_input" required><br><br>
+        <label>Uploaded by (must match resume uploader):</label><br>
+        <input type="text" name="uploaded_by" id="uploaded_by_jd" required><br><br>
+        <input type="submit" value="Upload JD + Job Role">
+    </form>
+    <div id="jdUploadResult"></div>
+
+    <h2>Rank Resumes (Dynamic)</h2>
+    <form id="rankForm">
+        <input type="hidden" id="rank_uploaded_by">
+        <input type="hidden" id="rank_job_title">
+
+        <label>Criterion 1:</label><br>
+        <input type="text" id="crit1"><br><br>
+        <label>Criterion 2:</label><br>
+        <input type="text" id="crit2"><br><br>
+        <label>Criterion 3:</label><br>
+        <input type="text" id="crit3"><br><br>
+        <button type="button" onclick="submitRank()">Rank Resumes</button>
+    </form>
+    <h3>Results:</h3>
+    <pre id="resultBox"></pre>
+
+    <script>
+        document.getElementById('resumeUploadForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+            const formData = new FormData(this);
+            const uploadedBy = document.getElementById("uploaded_by_input").value.trim();
+            const res = await fetch(this.action, { method: 'POST', body: formData });
+            const result = await res.json();
+            document.getElementById('resumeUploadResult').textContent = JSON.stringify(result, null, 2);
+            if (uploadedBy) document.getElementById("rank_uploaded_by").value = uploadedBy;
+        });
+
+        document.getElementById('jdUploadForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+            const formData = new FormData(this);
+            const uploadedBy = document.getElementById("uploaded_by_jd").value.trim();
+            const jobTitle = document.getElementById("job_title_input").value.trim();
+            const res = await fetch(this.action, { method: 'POST', body: formData });
+            const result = await res.json();
+            document.getElementById('jdUploadResult').textContent = JSON.stringify(result, null, 2);
+            if (uploadedBy) document.getElementById("rank_uploaded_by").value = uploadedBy;
+            if (jobTitle) document.getElementById("rank_job_title").value = jobTitle;
+        });
+
+        async function submitRank() {
+            const criteria = [];
+            const crit1 = document.getElementById("crit1").value.trim();
+            const crit2 = document.getElementById("crit2").value.trim();
+            const crit3 = document.getElementById("crit3").value.trim();
+            if (crit1) criteria.push(crit1);
+            if (crit2) criteria.push(crit2);
+            if (crit3) criteria.push(crit3);
+
+            const uploadedBy = document.getElementById("rank_uploaded_by").value.trim();
+            const jobTitle = document.getElementById("rank_job_title").value.trim();
+
+            if (!uploadedBy || !jobTitle || criteria.length === 0) {
+                document.getElementById("resultBox").textContent = "All fields are required.";
+                return;
+            }
+
+            const payload = {
+                criteria: criteria,
+                uploaded_by: uploadedBy,
+                job_title: jobTitle
+            };
+
+            try {
+                const res = await fetch("/rank-resumes-dynamic/", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await res.json();
+                document.getElementById("resultBox").textContent = JSON.stringify(result, null, 2);
+            } catch (err) {
+                document.getElementById("resultBox").textContent = "Error calling API: " + err.message;
+            }
+        }
+
+    </script>
+    </body>
+    </html>
+    """
+from fastapi import FastAPI, File, UploadFile, Form
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from typing import List
+from io import BytesIO
+import re
+from rank import get_relevance_score
+from extract import extract_text_from_pdf, extract_text_from_docx
+from sqlalchemy import create_engine, text
+from datetime import datetime
+import uuid
+from pydantic import BaseModel
+from datetime import datetime
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# def get_db_engine():
+#     connection_string = (
+#         "mssql+pyodbc://@10.201.1.86,50001/Resume_Parser"
+#         "?driver=ODBC+Driver+17+for+SQL+Server"
+#         "&trusted_connection=yes"
+#     )
+#     return create_engine(connection_string)
+
+
+def get_db_engine():
+    return create_engine("sqlite:///Resume_Parser.db", connect_args={"check_same_thread": False})
+
+
+def extract_email_regex(text):
+    match = re.search(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text)
+    return match.group(0) if match else None
+
+@app.post("/upload-folder/")
+async def upload_folder(uploaded_by: str = Form(...), files: List[UploadFile] = File(...)):
+    session_id = str(uuid.uuid4())
+    engine = get_db_engine()
+    with engine.begin() as conn:
+        for file in files:
+            content = await file.read()
+            resume_text = (
+                extract_text_from_pdf(BytesIO(content)) if file.filename.endswith(".pdf")
+                else extract_text_from_docx(BytesIO(content)) if file.filename.endswith(".docx")
+                else None
+            )
+            if not resume_text:
+                continue
+            email = extract_email_regex(resume_text) or "unknown@example.com"
+            conn.execute(text("""
+                INSERT INTO TempResumes (filename, email, resume_content, uploaded_by, upload_session_id, created_at)
+                VALUES (:filename, :email, :resume_content, :uploaded_by, :upload_session_id, :created_at)
+            """), {
+                "filename": file.filename,
+                "email": email,
+                "resume_content": resume_text,
+                "uploaded_by": uploaded_by,
+                "upload_session_id": session_id,
+                "created_at": datetime.now()
             })
 
     return {"status": "success", "message": f"{len(files)} resumes uploaded.", "uploaded_by": uploaded_by}
@@ -484,12 +1083,13 @@ async def upload_job_description(
     with engine.begin() as conn:
         conn.execute(text("""
             INSERT INTO TempJobDescription (uploaded_by, job_title, jd_text, upload_session_id, created_at)
-            VALUES (:uploaded_by, :job_title, :jd_text, :upload_session_id, GETDATE())
+            VALUES (:uploaded_by, :job_title, :jd_text, :upload_session_id, :created_at)
         """), {
             "uploaded_by": uploaded_by,
             "job_title": job_title,
             "jd_text": jd_text,
-            "upload_session_id": session_id
+            "upload_session_id": session_id,
+            "created_at": datetime.now()
         })
 
     return {
@@ -515,13 +1115,15 @@ async def rank_uploaded_resumes_dynamic(request: RankRequest):
     # Fetch latest JD for this uploaded_by and job_title
     with engine.connect() as conn:
         jd_row = conn.execute(text("""
-            SELECT TOP 1 jd_text 
-            FROM TempJobDescription 
-            WHERE uploaded_by = :uploaded_by AND job_title = :job_title 
-            ORDER BY created_at DESC
-        """), {
-            "uploaded_by": uploaded_by,
-            "job_title": job_title
+                SELECT jd_text 
+        FROM TempJobDescription 
+        WHERE uploaded_by = :uploaded_by AND job_title = :job_title 
+        ORDER BY created_at DESC 
+        LIMIT 1
+
+                """), {
+                    "uploaded_by": uploaded_by,
+                    "job_title": job_title
         }).fetchone()
 
     if not jd_row:
@@ -688,3 +1290,4 @@ def upload_form():
     </body>
     </html>
     """
+
