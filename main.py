@@ -692,9 +692,6 @@
 
 
 
-
-
-
 from fastapi import FastAPI, File, UploadFile, Form, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -755,7 +752,7 @@ async def upload_folder(uploaded_by: str = Form(...), files: List[UploadFile] = 
     return {"status": "success", "message": f"{len(files)} resumes uploaded.", "uploaded_by": uploaded_by}
 
 @app.post("/upload-jd/")
-async def upload_job_description(uploaded_by: str = Form(...), job_title: str = Form(...), jd_file: UploadFile = File(...)):
+async def upload_job_description(job_title: str = Form(...), jd_file: UploadFile = File(...)):
     content = await jd_file.read()
     engine = get_db_engine()
     session_id = str(uuid.uuid4())
@@ -766,6 +763,8 @@ async def upload_job_description(uploaded_by: str = Form(...), job_title: str = 
     )
     if not jd_text:
         return JSONResponse(content={"error": "Unsupported file type"}, status_code=400)
+
+    uploaded_by = "system"  # Or hardcode a default if needed
 
     with engine.begin() as conn:
         conn.execute(text("""
@@ -779,6 +778,7 @@ async def upload_job_description(uploaded_by: str = Form(...), job_title: str = 
             "created_at": datetime.now()
         })
     return {"status": "success", "message": "Job description uploaded.", "uploaded_by": uploaded_by, "job_title": job_title}
+
 
 class RankRequest(BaseModel):
     criteria: List[str]
@@ -794,12 +794,13 @@ async def rank_uploaded_resumes_dynamic(request: RankRequest):
 
     with engine.connect() as conn:
         jd_row = conn.execute(text("""
-            SELECT jd_text 
-            FROM TempJobDescription 
-            WHERE uploaded_by = :uploaded_by AND job_title = :job_title 
-            ORDER BY created_at DESC 
-            LIMIT 1
-        """), {"uploaded_by": uploaded_by, "job_title": job_title}).fetchone()
+        SELECT jd_text 
+        FROM TempJobDescription 
+        WHERE job_title = :job_title 
+        ORDER BY created_at DESC 
+        LIMIT 1
+    """), {"job_title": job_title}).fetchone()
+
 
     if not jd_row:
         return JSONResponse(content={"error": "No job description found."}, status_code=400)
@@ -930,10 +931,11 @@ def upload_form():
         <input type="file" name="jd_file" accept=".pdf,.docx" required><br><br>
         <label>Job Role:</label><br>
         <input type="text" name="job_title" id="job_title_input" required><br><br>
-        <label>Uploaded by (must match resume uploader):</label><br>
-        <input type="text" name="uploaded_by" id="uploaded_by_jd" required><br><br>
         <input type="submit" value="Upload JD + Job Role">
     </form>
+
+
+
     <div id="jdUploadResult"></div>
 
     <h2>Rank Resumes (Dynamic)</h2>
@@ -982,17 +984,16 @@ def upload_form():
             if (uploadedBy) document.getElementById("rank_uploaded_by").value = uploadedBy;
         });
 
-        document.getElementById('jdUploadForm').addEventListener('submit', async function (e) {
+       document.getElementById('jdUploadForm').addEventListener('submit', async function (e) {
             e.preventDefault();
             const formData = new FormData(this);
-            const uploadedBy = document.getElementById("uploaded_by_jd").value.trim();
             const jobTitle = document.getElementById("job_title_input").value.trim();
             const res = await fetch(this.action, { method: 'POST', body: formData });
             const result = await res.json();
             document.getElementById('jdUploadResult').textContent = JSON.stringify(result, null, 2);
-            if (uploadedBy) document.getElementById("rank_uploaded_by").value = uploadedBy;
             if (jobTitle) document.getElementById("rank_job_title").value = jobTitle;
         });
+
 
         async function submitRank() {
             const criteria = [];
