@@ -693,18 +693,21 @@
 
 
 
-from fastapi import FastAPI, File, UploadFile, Form
+
+
+from fastapi import FastAPI, File, UploadFile, Form, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 from io import BytesIO
-import re
-from rank import get_relevance_score
-from extract import extract_text_from_pdf, extract_text_from_docx
+from pydantic import BaseModel
 from sqlalchemy import create_engine, text
 from datetime import datetime
 import uuid
-from pydantic import BaseModel
+import re
+
+from extract import extract_text_from_pdf, extract_text_from_docx
+from rank import get_relevance_score
 
 app = FastAPI()
 
@@ -716,18 +719,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# def get_db_engine():
-#     connection_string = (
-#         "mssql+pyodbc://@10.201.1.86,50001/Resume_Parser"
-#         "?driver=ODBC+Driver+17+for+SQL+Server"
-#         "&trusted_connection=yes"
-#     )
-#     return create_engine(connection_string)
-
-
 def get_db_engine():
     return create_engine("sqlite:///Resume_Parser.db", connect_args={"check_same_thread": False})
-
 
 def extract_email_regex(text):
     match = re.search(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text)
@@ -759,16 +752,10 @@ async def upload_folder(uploaded_by: str = Form(...), files: List[UploadFile] = 
                 "upload_session_id": session_id,
                 "created_at": datetime.now()
             })
-
-
     return {"status": "success", "message": f"{len(files)} resumes uploaded.", "uploaded_by": uploaded_by}
 
 @app.post("/upload-jd/")
-async def upload_job_description(
-    uploaded_by: str = Form(...),
-    job_title: str = Form(...),
-    jd_file: UploadFile = File(...)
-):
+async def upload_job_description(uploaded_by: str = Form(...), job_title: str = Form(...), jd_file: UploadFile = File(...)):
     content = await jd_file.read()
     engine = get_db_engine()
     session_id = str(uuid.uuid4())
@@ -791,14 +778,7 @@ async def upload_job_description(
             "upload_session_id": session_id,
             "created_at": datetime.now()
         })
-
-
-    return {
-        "status": "success",
-        "message": "Job description uploaded.",
-        "uploaded_by": uploaded_by,
-        "job_title": job_title
-    }
+    return {"status": "success", "message": "Job description uploaded.", "uploaded_by": uploaded_by, "job_title": job_title}
 
 class RankRequest(BaseModel):
     criteria: List[str]
@@ -810,22 +790,16 @@ async def rank_uploaded_resumes_dynamic(request: RankRequest):
     criteria = request.criteria
     uploaded_by = request.uploaded_by
     job_title = request.job_title
-
     engine = get_db_engine()
 
-    # Fetch latest JD for this uploaded_by and job_title
     with engine.connect() as conn:
         jd_row = conn.execute(text("""
             SELECT jd_text 
-FROM TempJobDescription 
-WHERE uploaded_by = :uploaded_by AND job_title = :job_title 
-ORDER BY created_at DESC 
-LIMIT 1
-
-        """), {
-            "uploaded_by": uploaded_by,
-            "job_title": job_title
-        }).fetchone()
+            FROM TempJobDescription 
+            WHERE uploaded_by = :uploaded_by AND job_title = :job_title 
+            ORDER BY created_at DESC 
+            LIMIT 1
+        """), {"uploaded_by": uploaded_by, "job_title": job_title}).fetchone()
 
     if not jd_row:
         return JSONResponse(content={"error": "No job description found."}, status_code=400)
@@ -833,7 +807,6 @@ LIMIT 1
     jd_text = jd_row[0]
     results = []
 
-    # Fetch resumes
     with engine.connect() as conn:
         resumes = conn.execute(text("""
             SELECT filename, email, resume_content 
@@ -851,9 +824,8 @@ LIMIT 1
         with engine.connect() as conn:
             exists = conn.execute(text("""
                 SELECT COUNT(*) 
-FROM CV_Ranking_User_Email 
-WHERE email = :email AND job_title = :job_title
-
+                FROM CV_Ranking_User_Email 
+                WHERE email = :email AND job_title = :job_title
             """), {"email": email, "job_title": job_title}).scalar()
         if exists > 0:
             continue
@@ -883,6 +855,57 @@ WHERE email = :email AND job_title = :job_title
 
     results.sort(key=lambda x: x["weighted_score"], reverse=True)
     return {"ranked_resumes": results}
+
+@app.get("/get-ranked-resumes/")
+async def get_ranked_resumes(job_title: str = Query(..., description="Job Title to filter resumes by")):
+    engine = get_db_engine()
+    with engine.connect() as conn:
+        result = conn.execute(text("""
+            SELECT id, email, created_at, weighted_score, uploaded_by, job_title
+            FROM CV_Ranking_User_Email
+            WHERE job_title = :job_title
+            ORDER BY weighted_score DESC
+        """), {"job_title": job_title}).mappings().all()
+
+        response = []
+        for row in result:
+            response.append({
+                "id": row["id"],
+                "email": row["email"],
+                "created_at": str(row["created_at"]),
+                "weighted_score": row["weighted_score"],
+                "uploaded_by": row["uploaded_by"],
+                "job_title": row["job_title"]
+            })
+
+    return {"job_title": job_title, "ranked_resumes": response}
+
+@app.get("/get-user-by-email/")
+async def get_user_by_email(email: str = Query(..., description="Email address to fetch user records")):
+    engine = get_db_engine()
+    with engine.connect() as conn:
+        result = conn.execute(text("""
+            SELECT id, email, created_at, weighted_score, uploaded_by, job_title
+            FROM CV_Ranking_User_Email
+            WHERE email = :email
+            ORDER BY created_at DESC
+        """), {"email": email}).mappings().all()
+
+        if not result:
+            return {"email": email, "records": [], "message": "No records found for this email."}
+
+        records = []
+        for row in result:
+            records.append({
+                "id": row["id"],
+                "email": row["email"],
+                "created_at": str(row["created_at"]),
+                "weighted_score": row["weighted_score"],
+                "uploaded_by": row["uploaded_by"],
+                "job_title": row["job_title"]
+            })
+
+    return {"email": email, "records": records}
 
 @app.get("/", response_class=HTMLResponse)
 def upload_form():
@@ -917,7 +940,6 @@ def upload_form():
     <form id="rankForm">
         <input type="hidden" id="rank_uploaded_by">
         <input type="hidden" id="rank_job_title">
-
         <label>Criterion 1:</label><br>
         <input type="text" id="crit1"><br><br>
         <label>Criterion 2:</label><br>
@@ -928,6 +950,26 @@ def upload_form():
     </form>
     <h3>Results:</h3>
     <pre id="resultBox"></pre>
+
+    <!--New Section: Get Ranked Resumes -->
+    <h2>Get Ranked Resumes</h2>
+    <form id="getRankedResumesForm">
+        <label>Job Title:</label><br>
+        <input type="text" id="jobTitleForRankedResumes" required><br><br>
+        <button type="button" onclick="getRankedResumes()">Get Ranked Resumes</button>
+    </form>
+    <h3>Ranked Resumes Result:</h3>
+    <pre id="rankedResumesResult"></pre>
+
+    <!--New Section: Get User Data by Email -->
+    <h2>Get User Data by Email</h2>
+    <form id="getUserByEmailForm">
+        <label>Email:</label><br>
+        <input type="email" id="userEmailInput" required><br><br>
+        <button type="button" onclick="fetchUserData()">Fetch User Data</button>
+    </form>
+    <h3>User Records Result:</h3>
+    <pre id="userRecordsResult"></pre>
 
     <script>
         document.getElementById('resumeUploadForm').addEventListener('submit', async function (e) {
@@ -989,6 +1031,27 @@ def upload_form():
             }
         }
 
+        async function getRankedResumes() {
+            const jobTitle = document.getElementById("jobTitleForRankedResumes").value.trim();
+            if (!jobTitle) {
+                document.getElementById("rankedResumesResult").textContent = "Please enter a job title.";
+                return;
+            }
+            const res = await fetch(`/get-ranked-resumes/?job_title=${encodeURIComponent(jobTitle)}`);
+            const result = await res.json();
+            document.getElementById("rankedResumesResult").textContent = JSON.stringify(result, null, 2);
+        }
+
+        async function fetchUserData() {
+            const email = document.getElementById("userEmailInput").value.trim();
+            if (!email) {
+                document.getElementById("userRecordsResult").textContent = "Please enter a valid email.";
+                return;
+            }
+            const res = await fetch(`/get-user-by-email/?email=${encodeURIComponent(email)}`);
+            const result = await res.json();
+            document.getElementById("userRecordsResult").textContent = JSON.stringify(result, null, 2);
+        }
     </script>
     </body>
     </html>
