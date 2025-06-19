@@ -1308,40 +1308,73 @@ async def rank_uploaded_resumes_dynamic(request: RankRequest):
     return {"ranked_resumes": results}
 
 
-@app.get("/get-ranked-resumes/")
-async def get_ranked_resumes(job_title: str = Query(..., description="Job Title to filter resumes by")):
+# @app.get("/get-ranked-resumes/")
+# async def get_ranked_resumes(job_title: str = Query(..., description="Job Title to filter resumes by")):
+#     engine = get_db_engine()
+#     with engine.connect() as conn:
+#         result = conn.execute(text("""
+#             SELECT id, email, created_at, weighted_score, uploaded_by, job_title
+#             FROM CV_Ranking_User_Email
+#             WHERE job_title = :job_title
+#             ORDER BY weighted_score DESC
+#         """), {"job_title": job_title}).mappings().all()
+
+#         response = []
+#         for row in result:
+#             response.append({
+#                 "id": row["id"],
+#                 "email": row["email"],
+#                 "created_at": str(row["created_at"]),
+#                 "weighted_score": row["weighted_score"],
+#                 "uploaded_by": row["uploaded_by"],
+#                 "job_title": row["job_title"]
+#             })
+
+#     return {"job_title": job_title, "ranked_resumes": response}
+
+# @app.get("/get-user-by-email/")
+# async def get_user_by_email(email: str = Query(..., description="Email address to fetch user records")):
+#     engine = get_db_engine()
+#     with engine.connect() as conn:
+#         result = conn.execute(text("""
+#             SELECT id, email, created_at, weighted_score, uploaded_by, job_title
+#             FROM CV_Ranking_User_Email
+#             WHERE email = :email
+#             ORDER BY created_at DESC
+#         """), {"email": email}).mappings().all()
+
+#         if not result:
+#             return {"email": email, "records": [], "message": "No records found for this email."}
+
+#         records = []
+#         for row in result:
+#             records.append({
+#                 "id": row["id"],
+#                 "email": row["email"],
+#                 "created_at": str(row["created_at"]),
+#                 "weighted_score": row["weighted_score"],
+#                 "uploaded_by": row["uploaded_by"],
+#                 "job_title": row["job_title"]
+#             })
+
+#     return {"email": email, "records": records}
+
+
+@app.get("/get-records/")
+async def get_records(
+    email: str = Query(None, description="Email address to fetch user records"),
+    job_title: str = Query(None, description="Job title to fetch ranked resumes")
+):
     engine = get_db_engine()
-    with engine.connect() as conn:
-        result = conn.execute(text("""
-            SELECT id, email, created_at, weighted_score, uploaded_by, job_title
-            FROM CV_Ranking_User_Email
-            WHERE job_title = :job_title
-            ORDER BY weighted_score DESC
-        """), {"job_title": job_title}).mappings().all()
 
-        response = []
-        for row in result:
-            response.append({
-                "id": row["id"],
-                "email": row["email"],
-                "created_at": str(row["created_at"]),
-                "weighted_score": row["weighted_score"],
-                "uploaded_by": row["uploaded_by"],
-                "job_title": row["job_title"]
-            })
-
-    return {"job_title": job_title, "ranked_resumes": response}
-
-@app.get("/get-user-by-email/")
-async def get_user_by_email(email: str = Query(..., description="Email address to fetch user records")):
-    engine = get_db_engine()
-    with engine.connect() as conn:
-        result = conn.execute(text("""
-            SELECT id, email, created_at, weighted_score, uploaded_by, job_title
-            FROM CV_Ranking_User_Email
-            WHERE email = :email
-            ORDER BY created_at DESC
-        """), {"email": email}).mappings().all()
+    if email and not job_title:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT id, email, created_at, weighted_score, uploaded_by, job_title
+                FROM CV_Ranking_User_Email
+                WHERE email = :email
+                ORDER BY created_at DESC
+            """), {"email": email}).mappings().all()
 
         if not result:
             return {"email": email, "records": [], "message": "No records found for this email."}
@@ -1357,7 +1390,38 @@ async def get_user_by_email(email: str = Query(..., description="Email address t
                 "job_title": row["job_title"]
             })
 
-    return {"email": email, "records": records}
+        return {"email": email, "records": records}
+
+    elif job_title and not email:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT id, email, created_at, weighted_score, uploaded_by, job_title
+                FROM CV_Ranking_User_Email
+                WHERE job_title = :job_title
+                ORDER BY weighted_score DESC
+            """), {"job_title": job_title}).mappings().all()
+
+        response = []
+        for row in result:
+            response.append({
+                "id": row["id"],
+                "email": row["email"],
+                "created_at": str(row["created_at"]),
+                "weighted_score": row["weighted_score"],
+                "uploaded_by": row["uploaded_by"],
+                "job_title": row["job_title"]
+            })
+
+        return {"job_title": job_title, "ranked_resumes": response}
+
+    else:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Please provide either 'email' or 'job_title', but not both."
+            }
+        )
+
 
 @app.get("/", response_class=HTMLResponse)
 def upload_form():
