@@ -1506,14 +1506,7 @@ def upload_form():
 </script>
 
 
-    <h2>Get User Data by Email</h2>
-    <form id="getUserByEmailForm">
-        <label>Email:</label><br>
-        <input type="email" id="userEmailInput" required><br><br>
-        <button type="button" onclick="fetchUserData()">Fetch User Data</button>
-    </form>
-    <h3>User Records Result:</h3>
-    <pre id="userRecordsResult"></pre>
+  
 
     <script>
         document.getElementById('resumeUploadForm').addEventListener('submit', async function (e) {
