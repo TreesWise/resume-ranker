@@ -1522,6 +1522,26 @@ def upload_form():
 </body>
 </html>
 """
+# === Monthly Cleanup Logic Starts Here ===
+from apscheduler.schedulers.background import BackgroundScheduler
 
+def clear_old_data():
+    engine = get_db_engine()
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM TempResumes"))
+        conn.execute(text("DELETE FROM TempJobDescription"))
+        conn.execute(text("DELETE FROM CV_Ranking_User_Email"))
+    print("[INFO] Database cleared as part of monthly cleanup.")
+
+def schedule_monthly_cleanup():
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(clear_old_data, 'cron', day='last', hour=23, minute=59)
+    scheduler.start()
+
+
+@app.on_event("startup")
+def on_startup():
+    schedule_monthly_cleanup()
+# === Monthly Cleanup Logic Ends Here ===
 
 
