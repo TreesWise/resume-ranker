@@ -1472,14 +1472,39 @@ def upload_form():
     <h3>Results:</h3>
     <pre id="resultBox"></pre>
 
-    <h2>Get Ranked Resumes</h2>
-    <form id="getRankedResumesForm">
-        <label>Job Title:</label><br>
-        <input type="text" id="jobTitleForRankedResumes" required><br><br>
-        <button type="button" onclick="getRankedResumes()">Get Ranked Resumes</button>
-    </form>
-    <h3>Ranked Resumes Result:</h3>
-    <pre id="rankedResumesResult"></pre>
+       <h2>Search Records by Email or Job Title</h2>
+<form id="getRecordsForm">
+    <label>Email or Job Title:</label><br>
+    <input type="text" id="recordsInput" required><br><br>
+    <button type="button" onclick="getRecords()">Search</button>
+</form>
+<h3>Search Result:</h3>
+<pre id="recordsResult"></pre>
+
+<script>
+    async function getRecords() {
+        const input = document.getElementById("recordsInput").value.trim();
+        const output = document.getElementById("recordsResult");
+
+        if (!input) {
+            output.textContent = "Please enter an email or job title.";
+            return;
+        }
+
+        // Simple regex to check if it's likely an email
+        const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input);
+        const queryParam = isEmail ? `email=${encodeURIComponent(input)}` : `job_title=${encodeURIComponent(input)}`;
+
+        try {
+            const res = await fetch(`/get-records/?${queryParam}`);
+            const result = await res.json();
+            output.textContent = JSON.stringify(result, null, 2);
+        } catch (err) {
+            output.textContent = "Error fetching records: " + err.message;
+        }
+    }
+</script>
+
 
     <h2>Get User Data by Email</h2>
     <form id="getUserByEmailForm">
