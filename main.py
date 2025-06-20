@@ -1437,7 +1437,7 @@ def upload_form():
         <label>Upload by (Your Name):</label><br>
         <input type="text" name="uploaded_by" id="uploaded_by_input" required><br><br>
         <label>Select folder containing resumes (.pdf, .docx):</label><br>
-        <input type="file" name="files" webkitdirectory directory multiple accept=".pdf,.docx"><br><br>
+        <input type="file" name="files" webkitdirectory directory multiple accept=".pdf,.docx" required><br><br>
         <input type="submit" value="Upload Resumes">
     </form>
     <div id="resumeUploadResult"></div>
