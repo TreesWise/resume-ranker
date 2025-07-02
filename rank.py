@@ -99,7 +99,15 @@ def get_relevance_score(resume_text, jd_text, criteria_list):
     messages = [
         {
             "role": "user",
-            "content": f"""Evaluate the following resume against the job description using these criteria: {', '.join(criteria_list)}.
+            "content": f"""You are a strict evaluator assessing a resume against a job description based on the following criteria: {', '.join(criteria_list)}.
+
+            Assign each criterion a score from [0, 5, 10, ..., 100]. Use this guide:
+            - 90–100: Excellent alignment with clear, strong evidence.
+            - 70–85: Good alignment with examples or relevant experience.
+            - 50–65: Some alignment, may lack depth or relevance.
+            - 0–45: Weak or no alignment.
+
+            Avoid being generous. Penalize vague phrases or lack of specifics.
 
 Resume:
 {resume_text}
@@ -178,6 +186,8 @@ def calculate_weighted_score_manual(evaluation_result, criteria_with_weights):
     # Weighted average normalized back to 0–100 scale, then scaled to 10
     final_score = round((total_weighted_score / total_weight) / 10, 2)  # Out of 10
     return final_score, weight_map
+
+
 
 
 
