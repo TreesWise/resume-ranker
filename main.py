@@ -588,6 +588,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def initialize_database():
+    engine = get_db_engine()
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS TempResumes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT,
+                email TEXT,
+                resume_content TEXT,
+                uploaded_by TEXT,
+                upload_session_id TEXT,
+                created_at DATETIME
+            )
+        """))
+
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS TempJobDescription (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uploaded_by TEXT,
+                job_title TEXT,
+                jd_text TEXT,
+                upload_session_id TEXT,
+                created_at DATETIME
+            )
+        """))
+
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS CV_Ranking_User_Email (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT,
+                weighted_score REAL,
+                uploaded_by TEXT,
+                job_title TEXT,
+                created_at DATETIME
+            )
+        """))
+
+
 def get_db_engine():
     return create_engine("sqlite:///Resume_Parser.db", connect_args={"check_same_thread": False})
 
@@ -1109,4 +1147,5 @@ def schedule_monthly_cleanup():
 @app.on_event("startup")
 def on_startup():
     schedule_monthly_cleanup()
+    initialize_database() 
 # === Monthly Cleanup Logic Ends Here ===
