@@ -171,23 +171,39 @@ Return a JSON object with:
 
     return result
 
+# def calculate_weighted_score_manual(evaluation_result, criteria_with_weights):
+#     total_weight = sum(item["weight"] for item in criteria_with_weights)
+#     total_weighted_score = 0
+#     weight_map = {}
+
+#     for item in criteria_with_weights:
+#         criterion = item["criterion"]
+#         weight = item["weight"]
+#         score = evaluation_result[criterion]["score"]
+#         total_weighted_score += score * weight
+#         weight_map[criterion] = weight
+
+#     # Weighted average normalized back to 0–100 scale, then scaled to 10
+#     final_score = round((total_weighted_score / total_weight) / 10, 2)  # Out of 10
+#     return final_score, weight_map
+
+
+
 def calculate_weighted_score_manual(evaluation_result, criteria_with_weights):
-    total_weight = sum(item["weight"] for item in criteria_with_weights)
+    criteria = [item["criterion"] for item in criteria_with_weights]
+    n = len(criteria)
+    descending_weights = list(range(n, 0, -1))
+    total_weight = sum(descending_weights)
+
     total_weighted_score = 0
     weight_map = {}
 
-    for item in criteria_with_weights:
-        criterion = item["criterion"]
-        weight = item["weight"]
+    for i, criterion in enumerate(criteria):
+        weight = descending_weights[i]
         score = evaluation_result[criterion]["score"]
         total_weighted_score += score * weight
         weight_map[criterion] = weight
 
-    # Weighted average normalized back to 0–100 scale, then scaled to 10
-    final_score = round((total_weighted_score / total_weight) / 10, 2)  # Out of 10
+    final_score = round((total_weighted_score / total_weight) / 10, 2)
     return final_score, weight_map
-
-
-
-
 
