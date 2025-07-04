@@ -1187,6 +1187,15 @@ def on_startup():
 # === Monthly Cleanup Logic Ends Here ===
 
 
+@app.get("/clear-db/")
+def clear_database_now():
+    try:
+        clear_old_data()
+        return {"status": "success", "message": "Database cleared successfully."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 
 
 
