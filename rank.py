@@ -89,13 +89,6 @@ AZURE_OPENAI_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
 OPENAI_API_VERSION = os.getenv("OPENAI_API_VERSION")
 
 
-# def escape_criteria(criterion):
-#     """
-#     Escape characters in the criterion string to ensure valid JSON while preserving important characters like '.'.
-#     """
-#     # Escape quotes and other special characters that might break JSON
-#     escaped_criterion = html.escape(criterion)  # This handles escaping <, >, &, etc.
-#     return escaped_criterion
 
 def get_relevance_score(resume_text, jd_text, criteria_list):
     client = AzureOpenAI(
@@ -110,13 +103,13 @@ def get_relevance_score(resume_text, jd_text, criteria_list):
             "role": "user",
             "content": f"""You are a strict evaluator assessing a resume against a job description based on the following criteria: {', '.join(criteria_list)}.
 
-            Assign each criterion a score from [0, 5, 10, ..., 100]. Use this guide:
-            - 90–100: Excellent alignment with clear, strong evidence.
-            - 70–85: Good alignment with examples or relevant experience.
-            - 50–65: Some alignment, may lack depth or relevance.
-            - 0–45: Weak or no alignment.
+           Assign each criterion a score from 0 to 100 (inclusive). Use this guide:
+            - If the resume **does not mention the skill or experience at all**, assign a score of **0**.
+            - If the skill is mentioned but not clearly demonstrated or aligned with the job requirement, score between 10 and 60.
+            - If it’s clearly demonstrated and strongly aligned, score between 70 and 100.
 
             Avoid being generous. Penalize vague phrases or lack of specifics.
+            Do not assign arbitrary middle scores like 40 or 50 just because the section exists — base your score solely on content.
 
 Resume:
 {resume_text}
@@ -136,7 +129,7 @@ Return a JSON object with:
             "type": "object",
             "properties": {
                 "score": {
-                    "type": "integer",
+                    "type": "number",
                     "minimum": 0,
                     "maximum": 100,
                     "description": f"Score for: {criterion}"
