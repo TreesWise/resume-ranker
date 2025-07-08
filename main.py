@@ -977,6 +977,22 @@ def clear_database_now():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+
+@app.get("/debug/all-data", dependencies=[Depends(verify_admin_token)])
+def get_all_data():
+    engine = get_db_engine()
+    with engine.connect() as conn:
+        resumes = conn.execute(text("SELECT * FROM TempResumes")).mappings().all()
+        jd = conn.execute(text("SELECT * FROM TempJobDescription")).mappings().all()
+        rankings = conn.execute(text("SELECT * FROM CV_Ranking_User_Email")).mappings().all()
+    return {
+        "TempResumes": [dict(row) for row in resumes],
+        "TempJobDescription": [dict(row) for row in jd],
+        "CV_Ranking_User_Email": [dict(row) for row in rankings],
+    }
+
+
+
 @app.get("/", response_class=HTMLResponse)
 def upload_form():
     return """
