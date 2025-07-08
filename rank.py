@@ -78,6 +78,7 @@ import json
 from openai import AzureOpenAI
 from dotenv import load_dotenv
 import os
+import html
 
 # Load environment variables
 load_dotenv()
@@ -87,6 +88,14 @@ AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
 AZURE_OPENAI_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
 OPENAI_API_VERSION = os.getenv("OPENAI_API_VERSION")
 
+
+# def escape_criteria(criterion):
+#     """
+#     Escape characters in the criterion string to ensure valid JSON while preserving important characters like '.'.
+#     """
+#     # Escape quotes and other special characters that might break JSON
+#     escaped_criterion = html.escape(criterion)  # This handles escaping <, >, &, etc.
+#     return escaped_criterion
 
 def get_relevance_score(resume_text, jd_text, criteria_list):
     client = AzureOpenAI(
@@ -117,7 +126,7 @@ Job Description:
 
 Return a JSON object with:
 - For each criterion: a score (0–100) and a brief explanation.
-- A 'summary_comment' with an overall evaluation."""
+- A 'summary_comment' with an overall evaluation.""" 
         }
     ]
 
@@ -138,7 +147,7 @@ Return a JSON object with:
                 }
             },
             "required": ["score", "comment"]
-        } for criterion in criteria_list
+        } for criterion in criteria_list  # Pass original criteria, including .net
     }
 
     criteria_properties["summary_comment"] = {
@@ -171,22 +180,6 @@ Return a JSON object with:
 
     return result
 
-# def calculate_weighted_score_manual(evaluation_result, criteria_with_weights):
-#     total_weight = sum(item["weight"] for item in criteria_with_weights)
-#     total_weighted_score = 0
-#     weight_map = {}
-
-#     for item in criteria_with_weights:
-#         criterion = item["criterion"]
-#         weight = item["weight"]
-#         score = evaluation_result[criterion]["score"]
-#         total_weighted_score += score * weight
-#         weight_map[criterion] = weight
-
-#     # Weighted average normalized back to 0–100 scale, then scaled to 10
-#     final_score = round((total_weighted_score / total_weight) / 10, 2)  # Out of 10
-#     return final_score, weight_map
-
 
 
 def calculate_weighted_score_manual(evaluation_result, criteria_with_weights):
@@ -198,12 +191,25 @@ def calculate_weighted_score_manual(evaluation_result, criteria_with_weights):
     total_weighted_score = 0
     weight_map = {}
 
+    # print("Evaluation Result:", evaluation_result)  # Log to check structure
+
     for i, criterion in enumerate(criteria):
-        weight = descending_weights[i]
-        score = evaluation_result[criterion]["score"]
-        total_weighted_score += score * weight
-        weight_map[criterion] = weight
+        # Check for the criterion in both formats (with and without the dot)
+        criterion_normalized = criterion.strip(".").lower()  # Normalize to lowercase, remove the dot
+        found = False
+
+        # Try to match the normalized criterion (both versions)
+        for key in evaluation_result:
+            if criterion_normalized == key.strip(".").lower():
+                found = True
+                score = evaluation_result[key]["score"]
+                weight = descending_weights[i]
+                total_weighted_score += score * weight
+                weight_map[criterion] = weight
+                break
+
+        if not found:
+            print(f"[ERROR] Missing criterion '{criterion}' in evaluation result.")
 
     final_score = round((total_weighted_score / total_weight) / 10, 2)
     return final_score, weight_map
-
