@@ -670,44 +670,60 @@ async def upload_folder(uploaded_by: str = Form(...), files: List[UploadFile] = 
     engine = get_db_engine()
 
     with engine.begin() as conn:
+        bad_files = []
+
         for file in files:
             content = await file.read()
-            resume_text = (
-                extract_text_from_pdf(BytesIO(content)) if file.filename.endswith(".pdf")
-                else extract_text_from_docx(BytesIO(content)) if file.filename.endswith(".docx")
-                else None
-            )
+            file_name = file.filename
+            try:
+                if file_name.endswith(".pdf"):
+                    resume_text = extract_text_from_pdf(BytesIO(content))
+                elif file_name.endswith(".docx"):
+                    resume_text = extract_text_from_docx(BytesIO(content))
+                else:
+                    print(f"[SKIPPED] Unsupported file format: {file_name}")
+                    bad_files.append(file_name)
+                    continue
 
-            if not resume_text:
-                continue
 
-            email = extract_email_regex(resume_text) or "unknown@example.com"
+                if not resume_text:
+                    print(f"[ERROR] Could not extract text from file: {file_name}")
+                    bad_files.append(file_name)
+                    continue
 
-            # Always insert regardless of existing content
-            conn.execute(text("""
-                INSERT INTO TempResumes (
-                    filename,
-                    email,
-                    resume_content,
-                    uploaded_by,
-                    upload_session_id,
-                    created_at
-                ) VALUES (
-                    :filename,
-                    :email,
-                    :resume_content,
-                    :uploaded_by,
-                    :upload_session_id,
-                    :created_at
-                )
-            """), {
-                "filename": file.filename,
-                "email": email,
-                "resume_content": resume_text,
-                "uploaded_by": uploaded_by,
-                "upload_session_id": session_id,
-                "created_at": datetime.now()
-            })
+                if not resume_text:
+                    continue
+
+                email = extract_email_regex(resume_text) or "unknown@example.com"
+
+                # Always insert regardless of existing content
+                conn.execute(text("""
+                    INSERT INTO TempResumes (
+                        filename,
+                        email,
+                        resume_content,
+                        uploaded_by,
+                        upload_session_id,
+                        created_at
+                    ) VALUES (
+                        :filename,
+                        :email,
+                        :resume_content,
+                        :uploaded_by,
+                        :upload_session_id,
+                        :created_at
+                    )
+                """), {
+                    "filename": file.filename,
+                    "email": email,
+                    "resume_content": resume_text,
+                    "uploaded_by": uploaded_by,
+                    "upload_session_id": session_id,
+                    "created_at": datetime.now()
+                })
+            except Exception as e:
+                print(f"[ERROR] Failed to extract from {file_name}: {e}")
+                bad_files.append(file_name)
 
     return {
         "status": "success",
@@ -953,7 +969,13 @@ async def get_job_titles(query: str = Query(default=None, description="Optional 
         return {"job_titles": job_titles}
 
 
-
+@app.get("/clear-db/")
+def clear_database_now():
+    try:
+        clear_old_data()
+        return {"status": "success", "message": "Database cleared successfully."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 @app.get("/", response_class=HTMLResponse)
 def upload_form():
@@ -1186,14 +1208,6 @@ def on_startup():
     initialize_database() 
 # === Monthly Cleanup Logic Ends Here ===
 
-
-@app.get("/clear-db/")
-def clear_database_now():
-    try:
-        clear_old_data()
-        return {"status": "success", "message": "Database cleared successfully."}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 
 
