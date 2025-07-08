@@ -1,74 +1,34 @@
-
-
-from fastapi import FastAPI, File, UploadFile, Form, Query
+from fastapi import FastAPI, File, UploadFile, Form, Query, Depends, HTTPException, Header
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List
-from io import BytesIO
 from pydantic import BaseModel
 from sqlalchemy import create_engine, text
+from typing import List
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
+import asyncio
 import uuid
 import re
+import os
+from dotenv import load_dotenv
+import io
 
 from extract import extract_text_from_pdf, extract_text_from_docx
 from rank import get_relevance_score, calculate_weighted_score_manual
 
+# Load env
+load_dotenv()
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")
+
 app = FastAPI()
 
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
-
-def initialize_database():
-    engine = get_db_engine()
-    with engine.begin() as conn:
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS TempResumes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                filename TEXT,
-                email TEXT,
-                resume_content TEXT,
-                uploaded_by TEXT,
-                upload_session_id TEXT,
-                created_at DATETIME
-            )
-        """))
-
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS TempJobDescription (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                uploaded_by TEXT,
-                job_title TEXT,
-                jd_text TEXT,
-                upload_session_id TEXT,
-                created_at DATETIME
-            )
-        """))
-
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS CV_Ranking_User_Email (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT,
-                weighted_score REAL,
-                uploaded_by TEXT,
-                job_title TEXT,
-                created_at DATETIME
-            )
-        """))
-
-# @app.on_event("startup")
-# def on_startup():
-#     initialize_database()  # Create tables if not exist
-#     schedule_monthly_cleanup()  # Your existing monthly cleanup
-
-
-
+executor = ThreadPoolExecutor(max_workers=10)  # ⭐ CHANGED: global thread pool
 
 def get_db_engine():
     return create_engine("sqlite:///Resume_Parser.db", connect_args={"check_same_thread": False})
@@ -77,259 +37,171 @@ def extract_email_regex(text):
     match = re.search(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text)
     return match.group(0) if match else None
 
+def initialize_database():
+    engine = get_db_engine()
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS TempResumes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT, email TEXT, resume_content TEXT,
+                uploaded_by TEXT, upload_session_id TEXT, created_at DATETIME
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS TempJobDescription (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uploaded_by TEXT, job_title TEXT, jd_text TEXT,
+                upload_session_id TEXT, created_at DATETIME
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS CV_Ranking_User_Email (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT, weighted_score REAL, uploaded_by TEXT,
+                job_title TEXT, created_at DATETIME
+            )
+        """))
 
+# ⭐ Parallel extraction helper
+def parse_resume(file_name, content_bytes):
+    if file_name.endswith(".pdf"):
+        return extract_text_from_pdf(io.BytesIO(content_bytes))
+    elif file_name.endswith(".docx"):
+        return extract_text_from_docx(io.BytesIO(content_bytes))
+    return None
 
+import re
 
 @app.post("/upload-folder/")
 async def upload_folder(uploaded_by: str = Form(...), files: List[UploadFile] = File(...)):
     session_id = str(uuid.uuid4())
-    engine = get_db_engine()
+    bad_files = []
 
-    with engine.begin() as conn:
-        bad_files = []
+    def sanitize_filename(file_name):
+        # Remove special characters that may cause issues
+        return re.sub(r'[<>:"/\|?*]', '_', file_name)
 
-        for file in files:
+    async def process_and_store(file):
+        try:
             content = await file.read()
-            file_name = file.filename
-            try:
-                if file_name.endswith(".pdf"):
-                    resume_text = extract_text_from_pdf(BytesIO(content))
-                elif file_name.endswith(".docx"):
-                    resume_text = extract_text_from_docx(BytesIO(content))
-                else:
-                    print(f"[SKIPPED] Unsupported file format: {file_name}")
-                    bad_files.append(file_name)
-                    continue
-
-
-                if not resume_text:
-                    print(f"[ERROR] Could not extract text from file: {file_name}")
-                    bad_files.append(file_name)
-                    continue
-
-                if not resume_text:
-                    continue
-
-                email = extract_email_regex(resume_text) or "unknown@example.com"
-
-                # Always insert regardless of existing content
+            sanitized_filename = sanitize_filename(file.filename)  # sanitize the filename
+            loop = asyncio.get_running_loop()
+            resume_text = await loop.run_in_executor(executor, parse_resume, sanitized_filename, content)
+            
+            if not resume_text:
+                bad_files.append(sanitized_filename)
+                return
+            
+            email = extract_email_regex(resume_text) or "unknown@example.com"
+            engine = get_db_engine()
+            with engine.begin() as conn:
                 conn.execute(text("""
-                    INSERT INTO TempResumes (
-                        filename,
-                        email,
-                        resume_content,
-                        uploaded_by,
-                        upload_session_id,
-                        created_at
-                    ) VALUES (
-                        :filename,
-                        :email,
-                        :resume_content,
-                        :uploaded_by,
-                        :upload_session_id,
-                        :created_at
-                    )
+                    INSERT INTO TempResumes (filename, email, resume_content, uploaded_by, upload_session_id, created_at)
+                    VALUES (:filename, :email, :resume_content, :uploaded_by, :session_id, :created_at)
                 """), {
-                    "filename": file.filename,
-                    "email": email,
-                    "resume_content": resume_text,
-                    "uploaded_by": uploaded_by,
-                    "upload_session_id": session_id,
-                    "created_at": datetime.now()
+                    "filename": sanitized_filename, "email": email, "resume_content": resume_text,
+                    "uploaded_by": uploaded_by, "session_id": session_id, "created_at": datetime.now()
                 })
-            except Exception as e:
-                print(f"[ERROR] Failed to extract from {file_name}: {e}")
-                bad_files.append(file_name)
+        except Exception as e:
+            bad_files.append(file.filename)
 
-    return {
-        "status": "success",
-        "message": f"{len(files)} resumes uploaded.",
-        "uploaded_by": uploaded_by
-    }
+    tasks = [process_and_store(file) for file in files]
+    await asyncio.gather(*tasks)
 
+    return {"status": "success", "uploaded_by": uploaded_by, "bad_files": bad_files}
 
+# ✅ upload-jd unchanged except make it async
 @app.post("/upload-jd/")
 async def upload_job_description(
-    uploaded_by: str = Form(...),
-    job_title: str = Form(...),
-    jd_file: UploadFile = File(...)
+    uploaded_by: str = Form(...), job_title: str = Form(...), jd_file: UploadFile = File(...)
 ):
     content = await jd_file.read()
-    engine = get_db_engine()
-    session_id = str(uuid.uuid4())
-
-    jd_text = (
-        extract_text_from_docx(BytesIO(content)) if jd_file.filename.endswith(".docx")
-        else extract_text_from_pdf(BytesIO(content)) if jd_file.filename.endswith(".pdf")
-        else None
-    )
-    if not jd_text:
+    loop = asyncio.get_running_loop()
+    if jd_file.filename.endswith(".docx"):
+        jd_text = await loop.run_in_executor(executor, extract_text_from_docx, io.BytesIO(content))
+    elif jd_file.filename.endswith(".pdf"):
+        jd_text = await loop.run_in_executor(executor, extract_text_from_pdf, io.BytesIO(content))
+    else:
         return JSONResponse(content={"error": "Unsupported file type"}, status_code=400)
 
     job_title_lower = job_title.strip().lower()
+    session_id = str(uuid.uuid4())
+    engine = get_db_engine()
 
     with engine.begin() as conn:
-        existing_jd = conn.execute(text("""
-            SELECT jd_text 
-            FROM TempJobDescription
-            WHERE LOWER(job_title) = :job_title
-            ORDER BY created_at DESC
-            LIMIT 1
-        """), {
-            "job_title": job_title_lower
-        }).fetchone()
-
-        if existing_jd:
-            return {
-                "status": "exists",
-                "message": f"A job description for '{job_title}' already exists and will be used.",
-                "uploaded_by": uploaded_by,
-                "job_title": job_title
-            }
+        existing = conn.execute(text("""
+            SELECT jd_text FROM TempJobDescription WHERE LOWER(job_title)=:job_title
+            ORDER BY created_at DESC LIMIT 1
+        """), {"job_title": job_title_lower}).fetchone()
+        if existing:
+            return {"status": "exists", "job_title": job_title}
 
         conn.execute(text("""
             INSERT INTO TempJobDescription (uploaded_by, job_title, jd_text, upload_session_id, created_at)
-            VALUES (:uploaded_by, :job_title, :jd_text, :upload_session_id, :created_at)
-        """), {
-            "uploaded_by": uploaded_by,
-            "job_title": job_title_lower,
-            "jd_text": jd_text,
-            "upload_session_id": session_id,
-            "created_at": datetime.now()
-        })
+            VALUES (:uploaded_by, :job_title, :jd_text, :session_id, :created_at)
+        """), {"uploaded_by": uploaded_by, "job_title": job_title_lower,
+               "jd_text": jd_text, "session_id": session_id, "created_at": datetime.now()})
 
-    return {
-        "status": "success",
-        "message": "Job description uploaded.",
-        "uploaded_by": uploaded_by,
-        "job_title": job_title
-    }
+    return {"status": "success", "job_title": job_title}
 
+# ⭐ Parallel ranking
 class RankRequest(BaseModel):
-    criteria_with_weights: List[dict]  # still expecting [{criterion: "X"}]
+    criteria_with_weights: List[dict]
     uploaded_by: str
     job_title: str
 
-
 @app.post("/rank-resumes-dynamic/")
 async def rank_uploaded_resumes_dynamic(request: RankRequest):
-    # criteria = request.criteria
-    criteria_with_weights = request.criteria_with_weights
-    criteria = [item["criterion"] for item in criteria_with_weights]
+    criteria = [c["criterion"] for c in request.criteria_with_weights]
     uploaded_by = request.uploaded_by
-    job_title_raw = request.job_title
-    normalized_job_title = job_title_raw.strip().lower()  # ✅ Normalizing here
+    job_title_norm = request.job_title.strip().lower()
 
     engine = get_db_engine()
-
-    # ✅ Use normalized job title for fetching JD
+    jd_row = None
     with engine.connect() as conn:
         jd_row = conn.execute(text("""
-            SELECT jd_text 
-            FROM TempJobDescription 
-            WHERE LOWER(job_title) = :job_title 
-            ORDER BY created_at DESC 
-            LIMIT 1
-        """), {"job_title": normalized_job_title}).fetchone()
-
+            SELECT jd_text FROM TempJobDescription WHERE LOWER(job_title)=:jt
+            ORDER BY created_at DESC LIMIT 1
+        """), {"jt": job_title_norm}).fetchone()
     if not jd_row:
-        return JSONResponse(content={"error": "No job description found."}, status_code=400)
+        return JSONResponse(content={"error": "No JD found"}, status_code=400)
 
     jd_text = jd_row[0]
-    results = []
 
-    # ✅ Use latest session for this uploader
+    session_id_row = None
     with engine.connect() as conn:
-        session_row = conn.execute(text("""
-            SELECT upload_session_id 
-            FROM TempResumes 
-            WHERE uploaded_by = :uploaded_by
-            ORDER BY created_at DESC 
-            LIMIT 1
-        """), {"uploaded_by": uploaded_by}).fetchone()
+        session_id_row = conn.execute(text("""
+            SELECT upload_session_id FROM TempResumes WHERE uploaded_by=:ub
+            ORDER BY created_at DESC LIMIT 1
+        """), {"ub": uploaded_by}).fetchone()
+    if not session_id_row:
+        return JSONResponse(content={"error": "No resumes found"}, status_code=400)
 
-        if not session_row:
-            return JSONResponse(content={"error": "No recent resumes found."}, status_code=400)
-
-        latest_session_id = session_row[0]
-
+    session_id = session_id_row[0]
+    resumes = []
+    with engine.connect() as conn:
         resumes = conn.execute(text("""
-            SELECT filename, email, resume_content 
-            FROM TempResumes 
-            WHERE uploaded_by = :uploaded_by AND upload_session_id = :session_id
-        """), {"uploaded_by": uploaded_by, "session_id": latest_session_id}).fetchall()
+            SELECT filename, email, resume_content FROM TempResumes
+            WHERE uploaded_by=:ub AND upload_session_id=:sid
+        """), {"ub": uploaded_by, "sid": session_id}).fetchall()
 
-    if not resumes:
-        return JSONResponse(content={"error": "No resumes found."}, status_code=400)
+    async def evaluate_resume(filename, email, resume_text):
+        loop = asyncio.get_running_loop()
+        eval_result = await loop.run_in_executor(executor, get_relevance_score, resume_text, jd_text, criteria)
+        weighted_score, _ = calculate_weighted_score_manual(eval_result, request.criteria_with_weights)
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO CV_Ranking_User_Email (email, weighted_score, uploaded_by, job_title, created_at)
+                VALUES (:email, :score, :ub, :jt, :dt)
+            """), {"email": email, "score": weighted_score, "ub": uploaded_by, "jt": job_title_norm, "dt": datetime.now()})
+        return {
+            "filename": filename, "email": email, "weighted_score": weighted_score,
+            "section_scores": {c: eval_result[c] for c in criteria},
+            "evaluation_summary": eval_result.get("summary_comment", ""), "status": "processed"
+        }
 
-    for filename, email, resume_text in resumes:
-        if not resume_text or not email:
-            continue
-
-        with engine.connect() as conn:
-            recent_row = conn.execute(text("""
-                SELECT created_at 
-                FROM CV_Ranking_User_Email 
-                WHERE email = :email AND LOWER(job_title) = :job_title
-                ORDER BY created_at DESC
-                LIMIT 1
-            """), {"email": email, "job_title": normalized_job_title}).fetchone()
-
-            if recent_row and recent_row[0]:
-                last_uploaded = recent_row[0]
-                if isinstance(last_uploaded, str):
-                    last_uploaded = datetime.fromisoformat(last_uploaded)
-
-                if isinstance(last_uploaded, datetime) and datetime.now() - last_uploaded <= timedelta(days=30):
-                    results.append({
-                        "filename": filename,
-                        "email": email,
-                        "status": "skipped",
-                        "message": f"Resume for '{email}' and job title '{job_title_raw}' was already uploaded within the last month (on {last_uploaded.strftime('%Y-%m-%d')})."
-                    })
-                    continue
-            else:
-                # You could skip if no date is present as well to be safe
-                evaluation_result = get_relevance_score(resume_text, jd_text, criteria)
-                weighted_score, weight_map = calculate_weighted_score_manual(evaluation_result, criteria_with_weights)
-
-                with engine.begin() as conn:
-                    conn.execute(text("""
-                        INSERT INTO CV_Ranking_User_Email (email, weighted_score, uploaded_by, job_title, created_at)
-                        VALUES (:email, :weighted_score, :uploaded_by, :job_title, :created_at)
-                    """), {
-                        "email": email,
-                        "weighted_score": weighted_score,
-                        "uploaded_by": uploaded_by,
-                        "job_title": normalized_job_title,
-                        "created_at": datetime.now()
-                    })
-
-                # results.append({
-                #     "filename": filename,
-                #     "email": email,
-                #     "weighted_score": weighted_score,
-                #     "section_scores": {c: evaluation_result[c]["score"] for c in criteria},
-                #     "job_title": job_title_raw,  # ✅ Display original input in response
-                #     "evaluation": evaluation_result,
-                #     "status": "processed"
-                # })
-                results.append({
-                    "filename": filename,
-                    "email": email,
-                    "weighted_score": weighted_score,
-                    "section_scores": {
-                        c: {
-                            "score": evaluation_result[c]["score"],
-                            "comment": evaluation_result[c]["comment"]
-                        }
-                        for c in criteria
-                    },
-                    "job_title": job_title_raw,
-                    "evaluation_summary": evaluation_result.get("summary_comment", ""),
-                    "status": "processed"
-                })
-
+    tasks = [evaluate_resume(f, e, t) for f, e, t in resumes]
+    results = await asyncio.gather(*tasks)
     results.sort(key=lambda x: x.get("weighted_score", 0), reverse=True)
     return {"ranked_resumes": results}
 
@@ -383,6 +255,31 @@ async def get_job_titles(query: str = Query(default=None, description="Optional 
 
         job_titles = [row[0] for row in result if row[0]]
         return {"job_titles": job_titles}
+    
+from fastapi import Depends, HTTPException, Header
+from dotenv import load_dotenv
+load_dotenv()
+
+async def verify_admin_token(x_admin_token: str = Header(...)):
+    if x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    
+
+import os
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")
+@app.get("/debug/all-data", dependencies=[Depends(verify_admin_token)])
+def get_all_data():
+    engine = get_db_engine()
+    with engine.connect() as conn:
+        resumes = conn.execute(text("SELECT * FROM TempResumes")).mappings().all()
+        jd = conn.execute(text("SELECT * FROM TempJobDescription")).mappings().all()
+        rankings = conn.execute(text("SELECT * FROM CV_Ranking_User_Email")).mappings().all()
+    return {
+        "TempResumes": [dict(row) for row in resumes],
+        "TempJobDescription": [dict(row) for row in jd],
+        "CV_Ranking_User_Email": [dict(row) for row in rankings],
+    }
+
 
 
 @app.get("/clear-db/")
@@ -392,7 +289,6 @@ def clear_database_now():
         return {"status": "success", "message": "Database cleared successfully."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
-
 
 @app.get("/", response_class=HTMLResponse)
 def upload_form():
@@ -601,7 +497,7 @@ def upload_form():
 """
 
 
-    
+
 # === Monthly Cleanup Logic Starts Here ===
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -624,9 +520,5 @@ def on_startup():
     schedule_monthly_cleanup()
     initialize_database() 
 # === Monthly Cleanup Logic Ends Here ===
-
-
-
-
 
 
