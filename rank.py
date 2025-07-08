@@ -103,13 +103,13 @@ def get_relevance_score(resume_text, jd_text, criteria_list):
             "role": "user",
             "content": f"""You are a strict evaluator assessing a resume against a job description based on the following criteria: {', '.join(criteria_list)}.
 
-           Assign each criterion a score from 0 to 100 (inclusive). Use this guide:
-            - If the resume **does not mention the skill or experience at all**, assign a score of **0**.
-            - If the skill is mentioned but not clearly demonstrated or aligned with the job requirement, score between 10 and 60.
-            - If it’s clearly demonstrated and strongly aligned, score between 70 and 100.
+            Assign each criterion a score from [0,1,2 ..., 100]. Use this guide:
+            - 90–100: Excellent alignment with clear, strong evidence.
+            - 70–89: Good alignment with examples or relevant experience.
+            - 50–69: Some alignment, may lack depth or relevance.
+            - 0–49: Weak or no alignment.
 
             Avoid being generous. Penalize vague phrases or lack of specifics.
-            Do not assign arbitrary middle scores like 40 or 50 just because the section exists — base your score solely on content.
 
 Resume:
 {resume_text}
@@ -129,7 +129,7 @@ Return a JSON object with:
             "type": "object",
             "properties": {
                 "score": {
-                    "type": "number",
+                    "type": "integer",
                     "minimum": 0,
                     "maximum": 100,
                     "description": f"Score for: {criterion}"
