@@ -535,6 +535,7 @@ import re
 import os
 from dotenv import load_dotenv
 import io
+from datetime import datetime, timedelta
 
 from extract import extract_text_from_pdf, extract_text_from_docx
 from rank import get_relevance_score, calculate_weighted_score_manual
@@ -709,13 +710,33 @@ async def rank_uploaded_resumes_dynamic(request: RankRequest):
         """), {"ub": uploaded_by, "sid": session_id}).fetchall()
 
 
+   
     async def evaluate_resume(filename, email, resume_text):
+        # Check if this resume has already applied for the same job title within the last 30 days
+        thirty_days_ago = datetime.now() - timedelta(days=30)
+        with engine.connect() as conn:
+            recent_entry = conn.execute(text("""
+                SELECT 1 FROM CV_Ranking_User_Email 
+                WHERE email = :email AND job_title = :job_title AND created_at >= :cutoff
+            """), {
+                "email": email, 
+                "job_title": job_title_norm,
+                "cutoff": thirty_days_ago
+            }).fetchone()
+
+        if recent_entry:
+            return {
+                "filename": filename,
+                "email": email,
+                "status": "skipped",
+                "message": "This resume has applied for the same position within the last month."
+            }
+
+        # Otherwise, proceed with evaluation
         loop = asyncio.get_running_loop()
         eval_result = await loop.run_in_executor(executor, get_relevance_score, resume_text, jd_text, criteria)
-        
+
         section_scores = {}
-        
-        # Directly use the original criteria (no sanitization)
         for criterion in criteria:
             if criterion in eval_result:
                 section_scores[criterion] = eval_result[criterion]
@@ -728,12 +749,19 @@ async def rank_uploaded_resumes_dynamic(request: RankRequest):
             conn.execute(text(""" 
                 INSERT INTO CV_Ranking_User_Email (email, weighted_score, uploaded_by, job_title, created_at) 
                 VALUES (:email, :score, :ub, :jt, :dt)
-            """), {"email": email, "score": weighted_score, "ub": uploaded_by, "jt": job_title_norm, "dt": datetime.now()})
+            """), {
+                "email": email, "score": weighted_score,
+                "ub": uploaded_by, "jt": job_title_norm,
+                "dt": datetime.now()
+            })
 
         return {
-            "filename": filename, "email": email, "weighted_score": weighted_score,
+            "filename": filename,
+            "email": email,
+            "weighted_score": weighted_score,
             "section_scores": section_scores,
-            "evaluation_summary": eval_result.get("summary_comment", ""), "status": "processed"
+            "evaluation_summary": eval_result.get("summary_comment", ""),
+            "status": "processed"
         }
 
 
