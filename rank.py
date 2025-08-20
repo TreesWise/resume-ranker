@@ -1,4 +1,6 @@
 
+
+
 # import json
 # from openai import AzureOpenAI
 # from dotenv import load_dotenv
@@ -27,6 +29,18 @@
 #         {
 #             "role": "user",
 #             "content": f"""You are a strict evaluator assessing a resume against a job description based on the following criteria: {', '.join(criteria_list)}.
+            
+#             ⚠️ Important Instructions for JSON formatting:
+#             - Use the EXACT criterion names provided in the criteria list as JSON keys (do not change casing, punctuation, or spacing). 
+#             - Return ALL criteria, even if the resume has zero evidence. 
+#             - For each criterion: assign a score between [0–100] and provide a brief explanation.
+#             - Add a 'summary_comment' as an overall evaluation.
+#             - Use the criteria_list exactly as provided. Do not change capitalization or formatting of keys.
+#             - Treat all comparisons as case-insensitive.
+#             - For example, if the criterion is ".net", also match ".Net", ".NET", "ASP.NET", "VB.NET", "C#.NET", or "Dot Net".
+#             - Always return the score and explanation under the original key from criteria_list, even if the match came from a synonym.
+
+
 
 #             Assign each criterion a score from [0,1,2 ..., 100]. Use this guide:
 #             - 90–100: Excellent alignment with clear, strong evidence.
@@ -134,7 +148,6 @@
 
 
 
-
 import json
 from openai import AzureOpenAI
 from dotenv import load_dotenv
@@ -157,24 +170,22 @@ def get_relevance_score(resume_text, jd_text, criteria_list):
         api_key=AZURE_OPENAI_API_KEY,
         api_version=OPENAI_API_VERSION,
     )
-
+    
+    print("criteria_list----------------------",criteria_list)
+    # normalized_criteria = [criterion.lower() for criterion in criteria_list]
     # Compose the system/user message
     messages = [
         {
             "role": "user",
-            "content": f"""You are a strict evaluator assessing a resume against a job description based on the following criteria: {', '.join(criteria_list)}.
+            "content": f"""You are a strict evaluator assessing a resume against a job description based on the following criteria: {', '.join(criteria_list )}.
             
             ⚠️ Important Instructions for JSON formatting:
-            - Use the EXACT criterion names provided in the criteria list as JSON keys (do not change casing, punctuation, or spacing). 
             - Return ALL criteria, even if the resume has zero evidence. 
-            - For each criterion: assign a score between [0–100] and provide a brief explanation.
+            - For each criterion: assign a score between [0–100] and provide a brief explanation.   
             - Add a 'summary_comment' as an overall evaluation.
-            - Use the criteria_list exactly as provided. Do not change capitalization or formatting of keys.
             - Treat all comparisons as case-insensitive.
             - For example, if the criterion is ".net", also match ".Net", ".NET", "ASP.NET", "VB.NET", "C#.NET", or "Dot Net".
             - Always return the score and explanation under the original key from criteria_list, even if the match came from a synonym.
-
-
 
             Assign each criterion a score from [0,1,2 ..., 100]. Use this guide:
             - 90–100: Excellent alignment with clear, strong evidence.
@@ -243,6 +254,8 @@ Return a JSON object with:
     # Parse function response JSON
     args_json = response.choices[0].message.function_call.arguments
     result = json.loads(args_json)
+    
+    print("Evaluation Result:", result)
 
     return result
 
@@ -278,5 +291,6 @@ def calculate_weighted_score_manual(evaluation_result, criteria_with_weights):
             print(f"[ERROR] Missing criterion '{criterion}' in evaluation result.")
 
     final_score = round((total_weighted_score / total_weight) / 10, 2)
+    
+    print("final_score",final_score)
     return final_score, weight_map
-
