@@ -12,6 +12,7 @@
 # import os
 # from dotenv import load_dotenv
 # import io
+# from datetime import datetime, timedelta
 
 # from extract import extract_text_from_pdf, extract_text_from_docx
 # from rank import get_relevance_score, calculate_weighted_score_manual
@@ -185,20 +186,61 @@
 #             WHERE uploaded_by=:ub AND upload_session_id=:sid
 #         """), {"ub": uploaded_by, "sid": session_id}).fetchall()
 
+
+   
 #     async def evaluate_resume(filename, email, resume_text):
+#         # Check if this resume has already applied for the same job title within the last 30 days
+#         thirty_days_ago = datetime.now() - timedelta(days=30)
+#         with engine.connect() as conn:
+#             recent_entry = conn.execute(text("""
+#                 SELECT 1 FROM CV_Ranking_User_Email 
+#                 WHERE email = :email AND job_title = :job_title AND created_at >= :cutoff
+#             """), {
+#                 "email": email, 
+#                 "job_title": job_title_norm,
+#                 "cutoff": thirty_days_ago
+#             }).fetchone()
+
+#         if recent_entry:
+#             return {
+#                 "filename": filename,
+#                 "email": email,
+#                 "status": "skipped",
+#                 "message": "This resume has applied for the same position within the last month."
+#             }
+
+#         # Otherwise, proceed with evaluation
 #         loop = asyncio.get_running_loop()
 #         eval_result = await loop.run_in_executor(executor, get_relevance_score, resume_text, jd_text, criteria)
-#         weighted_score, _ = calculate_weighted_score_manual(eval_result, request.criteria_with_weights)
+
+#         section_scores = {}
+#         for criterion in criteria:
+#             if criterion in eval_result:
+#                 section_scores[criterion] = eval_result[criterion]
+#             else:
+#                 section_scores[criterion] = {"score": 0, "comment": "Criterion not found in result"}
+
+#         weighted_score, _ = calculate_weighted_score_manual(section_scores, request.criteria_with_weights)
+
 #         with engine.begin() as conn:
-#             conn.execute(text("""
-#                 INSERT INTO CV_Ranking_User_Email (email, weighted_score, uploaded_by, job_title, created_at)
+#             conn.execute(text(""" 
+#                 INSERT INTO CV_Ranking_User_Email (email, weighted_score, uploaded_by, job_title, created_at) 
 #                 VALUES (:email, :score, :ub, :jt, :dt)
-#             """), {"email": email, "score": weighted_score, "ub": uploaded_by, "jt": job_title_norm, "dt": datetime.now()})
+#             """), {
+#                 "email": email, "score": weighted_score,
+#                 "ub": uploaded_by, "jt": job_title_norm,
+#                 "dt": datetime.now()
+#             })
+
 #         return {
-#             "filename": filename, "email": email, "weighted_score": weighted_score,
-#             "section_scores": {c: eval_result[c] for c in criteria},
-#             "evaluation_summary": eval_result.get("summary_comment", ""), "status": "processed"
+#             "filename": filename,
+#             "email": email,
+#             "weighted_score": weighted_score,
+#             "section_scores": section_scores,
+#             "evaluation_summary": eval_result.get("summary_comment", ""),
+#             "status": "processed"
 #         }
+
 
 #     tasks = [evaluate_resume(f, e, t) for f, e, t in resumes]
 #     results = await asyncio.gather(*tasks)
@@ -521,6 +563,8 @@
 #     initialize_database() 
 # # === Monthly Cleanup Logic Ends Here ===
 
+
+
 from fastapi import FastAPI, File, UploadFile, Form, Query, Depends, HTTPException, Header
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -588,6 +632,7 @@ def initialize_database():
 
 # ⭐ Parallel extraction helper
 def parse_resume(file_name, content_bytes):
+    file_name = file_name.lower()
     if file_name.endswith(".pdf"):
         return extract_text_from_pdf(io.BytesIO(content_bytes))
     elif file_name.endswith(".docx"):
@@ -673,10 +718,24 @@ class RankRequest(BaseModel):
     criteria_with_weights: List[dict]
     uploaded_by: str
     job_title: str
+    
+    
+def normalize_criteria(criteria_list):
+    """
+    Create a mapping of lowercase → original criteria
+    Example: [".NET", "Python"] → {".net": ".NET", "python": "Python"}
+    """
+    normalized = {}
+    for c in criteria_list:
+        normalized[c.lower()] = c
+    return normalized
 
 @app.post("/rank-resumes-dynamic/")
 async def rank_uploaded_resumes_dynamic(request: RankRequest):
     criteria = [c["criterion"] for c in request.criteria_with_weights]
+    criteria = normalize_criteria(criteria)
+    
+    print("------------------------------",criteria)
     uploaded_by = request.uploaded_by
     job_title_norm = request.job_title.strip().lower()
 
@@ -734,7 +793,8 @@ async def rank_uploaded_resumes_dynamic(request: RankRequest):
 
         # Otherwise, proceed with evaluation
         loop = asyncio.get_running_loop()
-        eval_result = await loop.run_in_executor(executor, get_relevance_score, resume_text, jd_text, criteria)
+        resume_text_lower = resume_text.lower()
+        eval_result = await loop.run_in_executor(executor, get_relevance_score, resume_text_lower, jd_text, criteria)
 
         section_scores = {}
         for criterion in criteria:
