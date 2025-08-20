@@ -65,6 +65,7 @@
 
 # # ⭐ Parallel extraction helper
 # def parse_resume(file_name, content_bytes):
+#     file_name = file_name.lower()
 #     if file_name.endswith(".pdf"):
 #         return extract_text_from_pdf(io.BytesIO(content_bytes))
 #     elif file_name.endswith(".docx"):
@@ -150,10 +151,24 @@
 #     criteria_with_weights: List[dict]
 #     uploaded_by: str
 #     job_title: str
+    
+    
+# def normalize_criteria(criteria_list):
+#     """
+#     Create a mapping of lowercase → original criteria
+#     Example: [".NET", "Python"] → {".net": ".NET", "python": "Python"}
+#     """
+#     normalized = {}
+#     for c in criteria_list:
+#         normalized[c.lower()] = c
+#     return normalized
 
 # @app.post("/rank-resumes-dynamic/")
 # async def rank_uploaded_resumes_dynamic(request: RankRequest):
 #     criteria = [c["criterion"] for c in request.criteria_with_weights]
+#     criteria = normalize_criteria(criteria)
+    
+#     print("------------------------------",criteria)
 #     uploaded_by = request.uploaded_by
 #     job_title_norm = request.job_title.strip().lower()
 
@@ -211,7 +226,8 @@
 
 #         # Otherwise, proceed with evaluation
 #         loop = asyncio.get_running_loop()
-#         eval_result = await loop.run_in_executor(executor, get_relevance_score, resume_text, jd_text, criteria)
+#         resume_text_lower = resume_text.lower()
+#         eval_result = await loop.run_in_executor(executor, get_relevance_score, resume_text_lower, jd_text, criteria)
 
 #         section_scores = {}
 #         for criterion in criteria:
@@ -720,22 +736,24 @@ class RankRequest(BaseModel):
     job_title: str
     
     
-def normalize_criteria(criteria_list):
-    """
-    Create a mapping of lowercase → original criteria
-    Example: [".NET", "Python"] → {".net": ".NET", "python": "Python"}
-    """
-    normalized = {}
-    for c in criteria_list:
-        normalized[c.lower()] = c
-    return normalized
+# def normalize_criteria(criteria_list):
+#     """
+#     Create a mapping of lowercase → original criteria
+#     Example: [".NET", "Python"] → {".net": ".NET", "python": "Python"}
+#     """
+#     # normalized = {}
+#     # for c in criteria_list:
+#     #     normalized[c.lower()] = c
+#     # return normalized
+#     return [c.strip().lower() for c in criteria_list]
+
 
 @app.post("/rank-resumes-dynamic/")
 async def rank_uploaded_resumes_dynamic(request: RankRequest):
     criteria = [c["criterion"] for c in request.criteria_with_weights]
-    criteria = normalize_criteria(criteria)
+    # criteria = normalize_criteria(criteria)
     
-    print("------------------------------",criteria)
+    # print("------------------------------",criteria)
     uploaded_by = request.uploaded_by
     job_title_norm = request.job_title.strip().lower()
 
@@ -768,8 +786,6 @@ async def rank_uploaded_resumes_dynamic(request: RankRequest):
             WHERE uploaded_by=:ub AND upload_session_id=:sid
         """), {"ub": uploaded_by, "sid": session_id}).fetchall()
 
-
-   
     async def evaluate_resume(filename, email, resume_text):
         # Check if this resume has already applied for the same job title within the last 30 days
         thirty_days_ago = datetime.now() - timedelta(days=30)
@@ -794,14 +810,45 @@ async def rank_uploaded_resumes_dynamic(request: RankRequest):
         # Otherwise, proceed with evaluation
         loop = asyncio.get_running_loop()
         resume_text_lower = resume_text.lower()
-        eval_result = await loop.run_in_executor(executor, get_relevance_score, resume_text_lower, jd_text, criteria)
+        # Ensure resume text is lowercased
+        criteria_lower = [criterion.lower() for criterion in criteria]
+        
+        eval_result = await loop.run_in_executor(executor, get_relevance_score, resume_text_lower, jd_text, criteria_lower)
 
+        # section_scores = {}
+        # for criterion in criteria_lower:
+        #     if criterion in eval_result:
+        #         section_scores[criterion] = eval_result[criterion]
+        #     else:
+        #         section_scores[criterion] = {"score": 0, "comment": "Criterion not found in result"}
+        
+        
+        # In main.py, inside the evaluate_resume function...
+
+        # 1. Determine the correct dictionary containing the scores
+        score_source = None
+        if 'criteria_list' in eval_result and isinstance(eval_result['criteria_list'], dict):
+            # Use the nested dictionary if 'criteria_list' key exists
+            score_source = eval_result['criteria_list']
+        else:
+            # Otherwise, use the top-level dictionary
+            score_source = eval_result
+
+        # 2. Create a normalized mapping of keys from the score source
+        normalized_score_source = {key.strip(".").lower(): value for key, value in score_source.items()}
+
+        # 3. Populate section_scores using the original criteria to preserve keys
         section_scores = {}
-        for criterion in criteria:
-            if criterion in eval_result:
-                section_scores[criterion] = eval_result[criterion]
+        for original_criterion in criteria:  # `criteria` is the list from the request, e.g., ['.net']
+            # Normalize the criterion for lookup
+            normalized_criterion = original_criterion.strip(".").lower()
+            
+            if normalized_criterion in normalized_score_source:
+                # If found, add it to section_scores with the original key
+                section_scores[original_criterion] = normalized_score_source[normalized_criterion]
             else:
-                section_scores[criterion] = {"score": 0, "comment": "Criterion not found in result"}
+                # If not found, assign the default error value
+                section_scores[original_criterion] = {"score": 0, "comment": "Criterion not found in result"}
 
         weighted_score, _ = calculate_weighted_score_manual(section_scores, request.criteria_with_weights)
 
@@ -824,11 +871,114 @@ async def rank_uploaded_resumes_dynamic(request: RankRequest):
             "status": "processed"
         }
 
-
+    # Process each resume and gather results
     tasks = [evaluate_resume(f, e, t) for f, e, t in resumes]
     results = await asyncio.gather(*tasks)
+
+    # Sort results by weighted score
     results.sort(key=lambda x: x.get("weighted_score", 0), reverse=True)
+    
     return {"ranked_resumes": results}
+
+# @app.post("/rank-resumes-dynamic/")
+# async def rank_uploaded_resumes_dynamic(request: RankRequest):
+#     criteria = [c["criterion"] for c in request.criteria_with_weights]
+#     criteria = normalize_criteria(criteria)
+    
+#     print("------------------------------",criteria)
+#     uploaded_by = request.uploaded_by
+#     job_title_norm = request.job_title.strip().lower()
+
+#     engine = get_db_engine()
+#     jd_row = None
+#     with engine.connect() as conn:
+#         jd_row = conn.execute(text("""
+#             SELECT jd_text FROM TempJobDescription WHERE LOWER(job_title)=:jt
+#             ORDER BY created_at DESC LIMIT 1
+#         """), {"jt": job_title_norm}).fetchone()
+#     if not jd_row:
+#         return JSONResponse(content={"error": "No JD found"}, status_code=400)
+
+#     jd_text = jd_row[0]
+
+#     session_id_row = None
+#     with engine.connect() as conn:
+#         session_id_row = conn.execute(text("""
+#             SELECT upload_session_id FROM TempResumes WHERE uploaded_by=:ub
+#             ORDER BY created_at DESC LIMIT 1
+#         """), {"ub": uploaded_by}).fetchone()
+#     if not session_id_row:
+#         return JSONResponse(content={"error": "No resumes found"}, status_code=400)
+
+#     session_id = session_id_row[0]
+#     resumes = []
+#     with engine.connect() as conn:
+#         resumes = conn.execute(text("""
+#             SELECT filename, email, resume_content FROM TempResumes
+#             WHERE uploaded_by=:ub AND upload_session_id=:sid
+#         """), {"ub": uploaded_by, "sid": session_id}).fetchall()
+
+
+   
+#     async def evaluate_resume(filename, email, resume_text):
+#         # Check if this resume has already applied for the same job title within the last 30 days
+#         thirty_days_ago = datetime.now() - timedelta(days=30)
+#         with engine.connect() as conn:
+#             recent_entry = conn.execute(text("""
+#                 SELECT 1 FROM CV_Ranking_User_Email 
+#                 WHERE email = :email AND job_title = :job_title AND created_at >= :cutoff
+#             """), {
+#                 "email": email, 
+#                 "job_title": job_title_norm,
+#                 "cutoff": thirty_days_ago
+#             }).fetchone()
+
+#         if recent_entry:
+#             return {
+#                 "filename": filename,
+#                 "email": email,
+#                 "status": "skipped",
+#                 "message": "This resume has applied for the same position within the last month."
+#             }
+
+#         # Otherwise, proceed with evaluation
+#         loop = asyncio.get_running_loop()
+#         resume_text_lower = resume_text.lower()
+#         eval_result = await loop.run_in_executor(executor, get_relevance_score, resume_text_lower, jd_text, criteria)
+
+#         section_scores = {}
+#         for criterion in criteria:
+#             if criterion in eval_result:
+#                 section_scores[criterion] = eval_result[criterion]
+#             else:
+#                 section_scores[criterion] = {"score": 0, "comment": "Criterion not found in result"}
+
+#         weighted_score, _ = calculate_weighted_score_manual(section_scores, request.criteria_with_weights)
+
+#         with engine.begin() as conn:
+#             conn.execute(text(""" 
+#                 INSERT INTO CV_Ranking_User_Email (email, weighted_score, uploaded_by, job_title, created_at) 
+#                 VALUES (:email, :score, :ub, :jt, :dt)
+#             """), {
+#                 "email": email, "score": weighted_score,
+#                 "ub": uploaded_by, "jt": job_title_norm,
+#                 "dt": datetime.now()
+#             })
+
+#         return {
+#             "filename": filename,
+#             "email": email,
+#             "weighted_score": weighted_score,
+#             "section_scores": section_scores,
+#             "evaluation_summary": eval_result.get("summary_comment", ""),
+#             "status": "processed"
+#         }
+
+
+#     tasks = [evaluate_resume(f, e, t) for f, e, t in resumes]
+#     results = await asyncio.gather(*tasks)
+#     results.sort(key=lambda x: x.get("weighted_score", 0), reverse=True)
+#     return {"ranked_resumes": results}
 
 @app.get("/get-records/")
 async def get_records(
