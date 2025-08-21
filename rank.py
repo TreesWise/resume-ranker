@@ -261,28 +261,73 @@ Return a JSON object with:
 
 
 
-def calculate_weighted_score_manual(evaluation_result, criteria_with_weights):
-    criteria = [item["criterion"] for item in criteria_with_weights]
-    n = len(criteria)
-    descending_weights = list(range(n, 0, -1))
-    total_weight = sum(descending_weights)
+# def calculate_weighted_score_manual(evaluation_result, criteria_with_weights):
+#     criteria = [item["criterion"] for item in criteria_with_weights]
+#     n = len(criteria)
+#     descending_weights = list(range(n, 0, -1))
+#     total_weight = sum(descending_weights)
 
+#     total_weighted_score = 0
+#     weight_map = {}
+
+#     # print("Evaluation Result:", evaluation_result)  # Log to check structure
+
+#     for i, criterion in enumerate(criteria):
+#         # Check for the criterion in both formats (with and without the dot)
+#         criterion_normalized = criterion.strip(".").lower()  # Normalize to lowercase, remove the dot
+#         found = False
+
+#         # Try to match the normalized criterion (both versions)
+#         for key in evaluation_result:
+#             if criterion_normalized == key.strip(".").lower():
+#                 found = True
+#                 score = evaluation_result[key]["score"]
+#                 weight = descending_weights[i]
+#                 total_weighted_score += score * weight
+#                 weight_map[criterion] = weight
+#                 break
+
+#         if not found:
+#             print(f"[ERROR] Missing criterion '{criterion}' in evaluation result.")
+
+#     final_score = round((total_weighted_score / total_weight) / 10, 2)
+    
+#     print("final_score",final_score)
+#     return final_score, weight_map
+
+def calculate_weighted_score_manual(evaluation_result, criteria_with_weights):
+    # Extract criteria
+    criteria = [item.get("criterion") for item in criteria_with_weights]
+    
+    # Determine the number of criteria
+    num_criteria = len(criteria)
+    
+    # Step 1: Assign descending weights (highest weight goes to the first criterion)
+    initial_weights = [i for i in range(num_criteria, 0, -1)]  # Creates weights like [5, 4, 3, 2, 1]
+    total_weight = sum(initial_weights)
+    
+    # Step 2: Scale the weights to sum up to 10
+    scaled_weights = [weight / total_weight * 10 for weight in initial_weights]
+    
+    # Initialize variables for total weighted score calculation
     total_weighted_score = 0
     weight_map = {}
 
-    # print("Evaluation Result:", evaluation_result)  # Log to check structure
-
+    print("Weights and Criteria Evaluation:")
+    
+    # Iterate over each criterion and its associated weight
     for i, criterion in enumerate(criteria):
-        # Check for the criterion in both formats (with and without the dot)
-        criterion_normalized = criterion.strip(".").lower()  # Normalize to lowercase, remove the dot
+        weight = scaled_weights[i]  # Get the scaled weight for this criterion
+        print(f"Criterion: {criterion}, Scaled Weight: {weight:.2f}")
+
+        criterion_normalized = criterion.strip(".").lower()  # Normalize to lowercase, remove dot
         found = False
 
-        # Try to match the normalized criterion (both versions)
+        # Check for the criterion in the evaluation result
         for key in evaluation_result:
             if criterion_normalized == key.strip(".").lower():
                 found = True
                 score = evaluation_result[key]["score"]
-                weight = descending_weights[i]
                 total_weighted_score += score * weight
                 weight_map[criterion] = weight
                 break
@@ -290,7 +335,13 @@ def calculate_weighted_score_manual(evaluation_result, criteria_with_weights):
         if not found:
             print(f"[ERROR] Missing criterion '{criterion}' in evaluation result.")
 
-    final_score = round((total_weighted_score / total_weight) / 10, 2)
+    # Normalize the final score by dividing the weighted score by total weight (which is 10)
+    final_score = round((total_weighted_score / 10), 2)
     
-    print("final_score",final_score)
+    print(f"Total Weighted Score: {total_weighted_score}")
+    print(f"Final Score (after normalizing): {final_score}")
+    
     return final_score, weight_map
+
+
+
