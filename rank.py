@@ -176,24 +176,30 @@ def get_relevance_score(resume_text, jd_text, criteria_list):
     # Compose the system/user message
     messages = [
         {
-            "role": "user",
-            "content": f"""You are a strict evaluator assessing a resume against a job description based on the following criteria: {', '.join(criteria_list )}.
+           "role": "user",
+            "content": f"""You are a **strict hiring evaluator**. Compare the RESUME against the JOB DESCRIPTION using the criteria: {', '.join(criteria_list)}.
             
-            ⚠️ Important Instructions for JSON formatting:
-            - Return ALL criteria, even if the resume has zero evidence. 
-            - For each criterion: assign a score between [0–100] and provide a brief explanation.   
-            - Add a 'summary_comment' as an overall evaluation.
-            - Treat all comparisons as case-insensitive.
-            - For example, if the criterion is ".net", also match ".Net", ".NET", "ASP.NET", "VB.NET", "C#.NET", or "Dot Net".
-            - Always return the score and explanation under the original key from criteria_list, even if the match came from a synonym.
+            JSON Output Rules:
+            - Return ALL criteria, even if score = 0.
+            - For each criterion:
+            - **score**: integer (0–100)
+            - **comment**: must reference exact resume snippets or state "No evidence"
+            - Always include "summary_comment".
 
-            Assign each criterion a score from [0,1,2 ..., 100]. Use this guide:
-            - 90–100: Excellent alignment with clear, strong evidence.
-            - 70–89: Good alignment with examples or relevant experience.
-            - 50–69: Some alignment, may lack depth or relevance.
-            - 0–49: Weak or no alignment.
+            
+            Scoring Guide (JD-Aware):
+            - 90–100: Resume clearly meets or exceeds the JD’s required experience and responsibilities for this criterion.
+            - 70–89: Resume provides good but slightly below JD requirement (some evidence but not full alignment).
+            - 50–69: Resume shows partial alignment, but below JD expectations.
+            - 20–49: Very weak evidence, vague mentions, or does not meet JD requirement.
+            - 0–19: No evidence at all in the resume.
 
-            Avoid being generous. Penalize vague phrases or lack of specifics.
+            Rules:
+            - Do not assume skills unless explicitly in the resume.
+            - Penalize vague terms like "familiar with", "basic knowledge".
+            - Score only in relation to how well the resume aligns with the JD’s stated requirement.
+            - Comments must quote supporting resume text if possible.
+
 
 Resume:
 {resume_text}
